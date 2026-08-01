@@ -1,0 +1,75 @@
+{
+  "name": "THE BIG DIPPER",
+  "description": "THE BIG DIPPER — commandement WhatsApp MD propulsé par Baileys.",
+  "repository": "https://github.com/georges16388/the-big-dipper",
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bot",
+    "node",
+    "the-big-dipper",
+    "clan"
+  ],
+  "buildpacks": [
+    {
+      "url": "https://github.com/heroku/heroku-buildpack-nodejs.git"
+    }
+  ],
+  "env": {
+    "SESSION_ID": {
+      "description": "Ta session d'authentification THE BIG DIPPER.",
+      "required": false,
+      "value": ""
+    },
+    "PHONE_NUMBER": {
+      "description": "Numéro Owner pour les permissions uniquement (optionnel — ne déclenche plus de génération automatique de code, voir .pair / site / Telegram pour appairer un numéro).",
+      "required": false
+    },
+    "PREFIX": {
+      "description": "Le préfixe pour déclencher les ordres du bot.",
+      "required": false,
+      "value": "."
+    },
+    "SELF_MODE": {
+      "description": "Active le mode privé (true) ou public (false).",
+      "required": false,
+      "value": "true"
+    },
+    "AUTO_BIO": {
+      "description": "Met à jour automatiquement ta bio WhatsApp.",
+      "required": false,
+      "value": "false"
+    },
+    "ANTICALL": {
+      "description": "Bloque automatiquement les appels entrants.",
+      "required": false,
+      "value": "false"
+    },
+    "WELCOME_MSG": {
+      "description": "Active le message de bienvenue dans les groupes.",
+      "required": false,
+      "value": "false"
+    },
+    "GOODBYE_MSG": {
+      "description": "Active le message d'au revoir dans les groupes.",
+      "required": false,
+      "value": "false"
+    },
+    "AUTOREACT": {
+      "description": "Fait réagir le bot automatiquement aux messages.",
+      "required": false,
+      "value": "false"
+    },
+    "GHOSTG_MODE": {
+      "description": "Active l'IA d'exécution automatique (NLP).",
+      "required": false,
+      "value": "on"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  }
+}

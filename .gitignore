@@ -1,0 +1,17 @@
+# Dépendances
+node_modules/
+
+# Secrets
+.env
+
+# Credentials WhatsApp — [Chantier "Architecture hybride"] un dossier par
+# session multi-utilisateur (utils/fileAuthState.js), contient des clés
+# privées WhatsApp. Ne doit JAMAIS être versionné.
+sessions/
+
+# Credentials WhatsApp — mode mono-session (index.js, SESSION_NAME dans .env)
+auth_info_baileys/
+
+# Logs
+*.log
+npm-debug.log*

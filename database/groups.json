@@ -1,0 +1,7 @@
+{
+  "testgroup@g.us": {
+    "customMessages": {
+      "welcome": "Salut {nom} ! Bienvenue dans {groupe}, tu es le {total}e membre."
+    }
+  }
+}
