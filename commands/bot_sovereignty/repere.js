@@ -1,28 +1,123 @@
+'use strict';
+
 /**
- * Repere Command - 𝐃𝐈𝐏𝐏𝐄𝐑 Edition
- * Partage discret du canal via image + bouton newsletter
- * Commande : .repere
- *
- * [FIX v2]
- *  - contextInfo corrigé : encapsulé dans le champ imageMessage (pas au niveau racine)
- *  - Cela évite que handleAntigroupmention intercepte le message du bot lui-même
- *  - Guard !msg.key.fromMe ajouté dans handler.js (côté expéditeur)
- *  - Timeout axios augmenté à 15s
- *  - Gestion d'erreur améliorée avec log
+ * Repere Command — NEXUS TECH
+ * Partage de la chaîne Nexus Tech avec image + newsletter + vrai bouton CTA.
  */
 
+const axios = require('axios');
 const config = require('../../config');
+const {
+  proto,
+  prepareWAMessageMedia,
+  generateWAMessageFromContent,
+} = require('@whiskeysockets/baileys');
 
-const NEWSLETTER_JID  = '120363411005383995@newsletter';
-const NEWSLETTER_NAME = '𝐃𝐈𝐏𝐏𝐄𝐑';
-const IMAGE_URL       = 'https://files.catbox.moe/awh9z3.png';
+const IMAGE_URL = 'https://files.catbox.moe/awh9z3.png';
+const NEXUS_TECH_NAME = '⏤͟͟͞͞𝄞 ᬼ⃟𝙉̲𝙀̲𝙓̲𝙐̲𝙎̲ 𝙏̲𝙀̲𝘾̲𝙃̲ ✧ 👨‍💻';
+
+function getChannelConfig() {
+  return {
+    // Même newsletter que le menu : une seule source de vérité.
+    newsletterJid: config.newsletterJid || '120363411005383995@newsletter',
+    channelUrl: config.social?.whatsappChannel || 'https://whatsapp.com/channel/0029VbCKhnq7j6gEhuUKMP1V',
+  };
+}
+
+function getContextInfo() {
+  const { newsletterJid } = getChannelConfig();
+  return {
+    isForwarded: true,
+    forwardingScore: 1,
+    forwardedNewsletterMessageInfo: {
+      newsletterJid,
+      newsletterName: NEXUS_TECH_NAME,
+      serverMessageId: -1,
+    },
+  };
+}
+
+async function fetchImage() {
+  try {
+    const res = await axios.get(IMAGE_URL, {
+      responseType: 'arraybuffer',
+      timeout: 15000,
+      maxRedirects: 5,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    return Buffer.from(res.data);
+  } catch (err) {
+    console.warn('[repere] ⚠️ Image indisponible:', err.message);
+    return null;
+  }
+}
+
+async function sendInteractiveRepere(sock, jid, caption, imageBuffer, quoted) {
+  const { channelUrl } = getChannelConfig();
+  let header = proto.Message.InteractiveMessage.Header.create({
+    title: '',
+    subtitle: '',
+    hasMediaAttachment: false,
+  });
+
+  if (imageBuffer) {
+    const prepared = await prepareWAMessageMedia(
+      { image: imageBuffer },
+      { upload: sock.waUploadToServer }
+    );
+    header = proto.Message.InteractiveMessage.Header.create({
+      ...prepared,
+      title: '',
+      subtitle: '',
+      hasMediaAttachment: true,
+    });
+  }
+
+  const interactiveMessage = proto.Message.InteractiveMessage.create({
+    body: proto.Message.InteractiveMessage.Body.create({ text: caption }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: '' }),
+    header,
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+      buttons: [
+        {
+          name: 'cta_url',
+          buttonParamsJson: JSON.stringify({
+            display_text: '📢 Rejoindre la chaîne',
+            url: channelUrl,
+            merchant_url: channelUrl,
+          }),
+        },
+      ],
+    }),
+    contextInfo: getContextInfo(),
+  });
+
+  const generated = generateWAMessageFromContent(
+    jid,
+    {
+      viewOnceMessage: {
+        message: {
+          messageContextInfo: {
+            deviceListMetadata: {},
+            deviceListMetadataVersion: 2,
+          },
+          interactiveMessage,
+        },
+      },
+    },
+    { quoted: quoted || undefined, userJid: sock.user?.id }
+  );
+
+  await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
+  return generated;
+}
 
 module.exports = {
   name: 'repere',
   aliases: ['Repere', 'REPERE', 'rep'],
   category: '👑 Owner',
   ownerOnly: true,
-  description: '『 𝐃𝐈𝐏𝐏𝐄𝐑 』➪ ᴘᴀʀᴛᴀɢᴇ ᴅɪsᴄʀᴇᴛ ᴅᴜ ᴄᴀɴᴀʟ',
+  description: '『 NEXUS TECH 』➪ partage la chaîne officielle avec bouton direct',
   usage: `${config.prefix || '.'}repere`,
 
   async execute(sock, msg, args, extra) {
@@ -33,78 +128,48 @@ module.exports = {
     }
 
     const caption =
-      `⚜️ Tu crois avoir déjà vu des stickers lourds ?\n` +
-      `Attends de voir ce qui arrive… 😈\n\n` +
-      `🔥 Packs exclusifs\n` +
-      `🔥 Stickers rares\n` +
-      `🔥 Ambiance Shadow / Anime\n` +
-      `🔥 Contenu introuvable ailleurs\n\n` +
-      `Chaque nouvel abonné débloque encore plus de contenu 👁️\n\n` +
-      `📢 Abonne-toi maintenant et partage la chaîne au maximum pour ne rien rater.\n\n` +
-      `🌀 Les prochains drops seront encore plus fous…\n\n` +
-      `⚔️ Rejoins l'ombre avant les autres.\n\n` +
-      `_Edited by DIPPER_`;
+      `${NEXUS_TECH_NAME}\n\n` +
+      `☁️ׄ ︵ ׅ 🚀 𝗟𝗮 𝘁𝗲𝗰𝗵 𝗯𝗼𝘂𝗴𝗲 𝘃𝗶𝘁𝗲… 𝗻𝗲 𝗿𝗲𝘀𝘁𝗲 𝗽𝗮𝘀 𝗱𝗲𝗿𝗿𝗶𝗲̀𝗿𝗲.\n\n` +
+      `⚡ 𝗗𝗲́𝘃𝗲𝗹𝗼𝗽𝗽𝗲𝗺𝗲𝗻𝘁 & 𝗽𝗿𝗼𝗴𝗿𝗮𝗺𝗺𝗮𝘁𝗶𝗼𝗻\n` +
+      `🤖 𝗜𝗔 & 𝗮𝘂𝘁𝗼𝗺𝗮𝘁𝗶𝘀𝗮𝘁𝗶𝗼𝗻\n` +
+      `🛡️ 𝗖𝘆𝗯𝗲𝗿𝘀𝗲́𝗰𝘂𝗿𝗶𝘁𝗲́\n` +
+      `🧰 𝗢𝘂𝘁𝗶𝗹𝘀, 𝗮𝗽𝗽𝘀 & 𝗿𝗲𝘀𝘀𝗼𝘂𝗿𝗰𝗲𝘀\n` +
+      `💡 𝗣𝗿𝗼𝗷𝗲𝘁𝘀, 𝗮𝘀𝘁𝘂𝗰𝗲𝘀 & 𝗱𝗲́𝗰𝗼𝘂𝘃𝗲𝗿𝘁𝗲𝘀\n\n` +
+      `Des contenus utiles. Des nouveautés. Des projets concrets.\n\n` +
+      `📢 𝗥𝗲𝗷𝗼𝗶𝗻𝘀 𝗡𝗲𝘅𝘂𝘀 𝗧𝗲𝗰𝗵 𝗲𝘁 𝗿𝗲𝘀𝘁𝗲 𝗰𝗼𝗻𝗻𝗲𝗰𝘁𝗲́ 𝗮̀ 𝗰𝗲 𝗾𝘂𝗶 𝗰𝗼𝗻𝘀𝘁𝗿𝘂𝗶𝘁 𝗱𝗲𝗺𝗮𝗶𝗻.\n\n` +
+      `𓆩⚡𓆪 𝙉𝙀𝙓𝙐𝙎 𝙏𝙀𝘾𝙃\n` +
+      `𝑻𝒆𝒄𝒉 • 𝑪𝒐𝒅𝒆 • 𝑨𝑰 • 𝑪𝒚𝒃𝒆𝒓`;
 
-    // [FIX v2] Le contextInfo doit être encapsulé CORRECTEMENT pour Baileys.
-    // Mettre contextInfo directement à la racine du payload sendMessage PEUT provoquer
-    // une interférence avec handleAntigroupmention si isForwarded=true est détecté
-    // sur le message écho (fromMe=true) par le handler.
-    //
-    // SOLUTION 1 (handler.js) : Guard !msg.key.fromMe ajouté avant handleAntigroupmention ✅
-    // SOLUTION 2 (ici) : on garde la structure correcte Baileys pour le newsletter button
-    //
-    // NOTE : Baileys attend contextInfo DANS le payload message, pas dans les options.
-    // La structure correcte pour un bouton newsletter dans sendMessage est :
-    //   sock.sendMessage(jid, { image, caption, contextInfo: {...} }, opts)
-    // C'est déjà correct — le fix principal est dans handler.js.
+    const imageBuffer = await fetchImage();
+    const quoted = from?.endsWith('@g.us') ? msg : null;
 
     try {
-      const axios = require('axios');
-      const imgResponse = await axios.get(IMAGE_URL, {
-        responseType: 'arraybuffer',
-        timeout: 15000,  // [FIX] timeout augmenté à 15s
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      });
-      const imageBuffer = Buffer.from(imgResponse.data);
-
-      await sock.sendMessage(from, {
-        image: imageBuffer,
-        caption,
-        contextInfo: {
-          isForwarded      : true,
-          forwardingScore  : 999,
-          forwardedNewsletterMessageInfo: {
-            newsletterJid  : NEWSLETTER_JID,
-            newsletterName : NEWSLETTER_NAME,
-            serverMessageId: -1,
-          },
-        },
-      }, { quoted: msg });
-
-      console.log('[repere] ✅ Message canal envoyé dans:', from);
-
+      await sendInteractiveRepere(sock, from, caption, imageBuffer, quoted);
+      console.log('[repere] ✅ Nexus Tech + newsletter + CTA envoyés dans:', from);
+      return;
     } catch (err) {
-      // [FIX] Log l'erreur pour debug (réseau, catbox down, etc.)
-      console.warn('[repere] ⚠️ Image échouée, fallback texte:', err.message);
+      console.warn('[repere] ⚠️ CTA interactif indisponible, fallback standard:', err.message);
+    }
 
-      // Fallback texte si l'image ne charge pas
-      try {
+    const { channelUrl } = getChannelConfig();
+    const fallbackText = `${caption}\n\n📢 *Rejoindre la chaîne :* ${channelUrl}`;
+
+    try {
+      if (imageBuffer) {
         await sock.sendMessage(from, {
-          text: caption,
-          contextInfo: {
-            isForwarded      : true,
-            forwardingScore  : 999,
-            forwardedNewsletterMessageInfo: {
-              newsletterJid  : NEWSLETTER_JID,
-              newsletterName : NEWSLETTER_NAME,
-              serverMessageId: -1,
-            },
-          },
-        }, { quoted: msg });
-      } catch (err2) {
-        console.error('[repere] ❌ Fallback texte aussi échoué:', err2.message);
-        await reply(`*❌ Erreur repere :* ${err2.message.slice(0, 80)}`);
+          image: imageBuffer,
+          caption: fallbackText,
+          contextInfo: getContextInfo(),
+        }, quoted ? { quoted } : undefined);
+      } else {
+        await sock.sendMessage(from, {
+          text: fallbackText,
+          contextInfo: getContextInfo(),
+        }, quoted ? { quoted } : undefined);
       }
+    } catch (err2) {
+      console.error('[repere] ❌ Fallback échoué:', err2.message);
+      await reply(`*❌ Erreur repere :* ${err2.message.slice(0, 80)}`);
     }
   },
 };
