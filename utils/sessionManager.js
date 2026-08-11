@@ -248,6 +248,7 @@ async function startSession(db, phoneNumber, opts = {}) {
 
     } else if (connection === 'open') {
       session.isOnline = true;
+      session.isRegistered = true;
       reconnectAttempts = 0;
       processedMessages.clear();
       sessionIndex.setState(sessionId, { isOnline: true, isRegistered: true }).catch(() => {});
@@ -276,7 +277,15 @@ async function startSession(db, phoneNumber, opts = {}) {
   });
 
   // ─── CREDS ───────────────────────────────────────────────────────────────
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async (update) => {
+    try { await saveCreds(); } catch (err) {
+      console.error(`[SessionManager] ❌ saveCreds ${sessionId}:`, err.message);
+    }
+    if (update?.registered === true || state.creds?.registered === true) {
+      session.isRegistered = true;
+      sessionIndex.setState(sessionId, { isRegistered: true }).catch(() => {});
+    }
+  });
 
   // ─── MESSAGES (handler principal) ────────────────────────────────────────
   let _lastActivityTouch = 0;
