@@ -148,7 +148,7 @@ async function startSession(db, phoneNumber, opts = {}) {
   const { store: messageStore, cleanup: storeCleanup } = createMessageStore();
   const { map: processedMessages, timer: processedTimer } = createProcessedMap();
 
-  let reconnectAttempts = 0;
+  let reconnectAttempts = Number.isFinite(opts.reconnectAttempts) ? opts.reconnectAttempts : 0;
   let _isShuttingDown   = false;
 
   // ── Création du socket ─────────────────────────────────────────────────
@@ -179,7 +179,7 @@ async function startSession(db, phoneNumber, opts = {}) {
     timers: { heartbeat: null, monitor: null, ping: null, reconnect: null, storeCleanup, processedTimer },
     processedMessages,
     messageStore,
-    reconnectAttempts: 0,
+    reconnectAttempts,
     isOnline: false,
     isRegistered: !!state.creds.registered, // [PHASE 3] déjà appairé (reconnexion) vs nouvelle session
     isStopping: false,
@@ -219,15 +219,21 @@ async function startSession(db, phoneNumber, opts = {}) {
       session.isOnline = false;
       _clearSessionTimers(session);
 
-      const statusCode      = lastDisconnect?.error?.output?.statusCode;
-      const errorMessage    = lastDisconnect?.error?.message || 'inconnue';
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut && !_isShuttingDown && !session.isStopping;
+      const statusCode   = lastDisconnect?.error?.output?.statusCode;
+      const errorMessage = lastDisconnect?.error?.message || 'inconnue';
+      const terminalDisconnect = [
+        DisconnectReason.loggedOut,
+        DisconnectReason.connectionReplaced,
+        DisconnectReason.badSession,
+      ].includes(statusCode);
+      const shouldReconnect = !terminalDisconnect && !_isShuttingDown && !session.isStopping;
 
       console.log(`[SessionManager] 🔌 ${sessionId} déconnecté — code=${statusCode} | reconnexion=${shouldReconnect}`);
       sessionIndex.setState(sessionId, { isOnline: false }).catch(() => {});
 
       if (shouldReconnect) {
         reconnectAttempts++;
+        session.reconnectAttempts = reconnectAttempts;
         const delay = Math.min(2000 * Math.pow(1.3, reconnectAttempts), 15000);
         console.log(`[SessionManager] 🔄 ${sessionId} reconnexion dans ${(delay / 1000).toFixed(1)}s...`);
         sessionIndex.incrementStat(sessionId, 'reconnectCount').catch(() => {});
@@ -235,13 +241,17 @@ async function startSession(db, phoneNumber, opts = {}) {
           session.timers.reconnect = null;
           if (_isShuttingDown || session.isStopping) return;
           if (activeSessions.get(sessionId) !== session) return;
-          startSession(db, phoneNumber, { owner: opts.owner, origin: opts.origin }).catch(err => {
+          startSession(db, phoneNumber, {
+            owner: opts.owner,
+            origin: opts.origin,
+            reconnectAttempts,
+          }).catch(err => {
             console.error(`[SessionManager] ❌ reconnexion ${sessionId}:`, err.message);
           });
         }, delay);
         if (session.timers.reconnect.unref) session.timers.reconnect.unref();
       } else {
-        console.log(`[SessionManager] ❌ ${sessionId} loggedOut — session terminée`);
+        console.log(`[SessionManager] ❌ ${sessionId} session terminée — ${errorMessage}`);
         _cleanupSession(session);
         if (activeSessions.get(sessionId) === session) activeSessions.delete(sessionId);
       }
@@ -250,6 +260,7 @@ async function startSession(db, phoneNumber, opts = {}) {
       session.isOnline = true;
       session.isRegistered = true;
       reconnectAttempts = 0;
+      session.reconnectAttempts = 0;
       processedMessages.clear();
       sessionIndex.setState(sessionId, { isOnline: true, isRegistered: true }).catch(() => {});
 
@@ -378,7 +389,7 @@ function _cleanupSession(session) {
   try { clearInterval(session.timers.storeCleanup); } catch {}
   try { clearInterval(session.timers.processedTimer); } catch {}
   session.messageStore?.clear?.();
-  session.processedMessages?.map?.clear?.();
+  session.processedMessages?.clear?.();
 }
 
 /**
