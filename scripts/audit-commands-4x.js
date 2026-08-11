@@ -155,3 +155,11 @@ if (critical.length) {
 
 const warnings = rows.reduce((n, r) => n + [r.audit1,r.audit2,r.audit3,r.audit4].filter(a => a.status === 'WARN').length, 0);
 console.log(`[audit-commands-4x] ✅ 4 audits terminés, ${warnings} avertissement(s) non bloquant(s).`);
+
+// Les modules de commandes sont chargés avec require() pendant l'audit.
+// Certains démarrent volontairement des timers/intervals au chargement pour
+// leur fonctionnement runtime. Une fois le rapport écrit et tous les audits
+// terminés, ces handles ne doivent pas garder le processus de BUILD vivant.
+// Sortir explicitement ici n'affecte pas le bot : ce fichier est uniquement
+// un script d'audit exécuté dans un processus Node séparé.
+process.exit(0);
