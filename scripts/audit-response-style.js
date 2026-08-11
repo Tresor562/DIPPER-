@@ -55,10 +55,24 @@ const handler = fs.readFileSync(path.join(ROOT, 'handler.js'), 'utf8');
 // enveloppé, et buildExtra leur fournit les phrases du moteur discipliné.
 const runtimeGuardInstalled = handler.includes('[RESPONSE STYLE DISCIPLINE]') &&
   handler.includes('const disciplinedPayload = decoratePayload(payload);') &&
-  handler.includes('await _orig(jid, disciplinedPayload, opts)');
+  handler.includes('await _orig(jid, disciplinedPayload, disciplinedOpts)');
 const disciplinedPhrasesInstalled = handler.includes('[RESPONSE STYLE PHRASES]') &&
   handler.includes("getLegacyPhrases()") &&
   handler.includes("renderResponse: require('./utils/responseStyle').renderResponse");
+
+// Non-régression livraison : les commandes legacy utilisent encore souvent
+// sendMessage(..., { quoted: msg }). En privé, Baileys peut accepter ce quoted
+// incomplet sans afficher le message. Le wrapper central doit donc retirer
+// quoted uniquement pour les JID privés et conserver le reste des options.
+const privateSendSafetyInstalled = handler.includes('[PRIVATE SEND SAFETY]') &&
+  handler.includes('if (isPrivateSend && opts?.quoted)') &&
+  handler.includes('disciplinedOpts = Object.keys(restOpts).length ? restOpts : undefined');
+
+// Non-régression diagnostic : si une commande plante, le catch global doit
+// disposer d'un texte d'erreur réel. Sans errText, le catch plantait lui-même
+// et l'utilisateur ne voyait que la réaction de commande.
+const commandErrorFallbackInstalled = handler.includes('[COMMAND ERROR RESPONSE]') &&
+  handler.includes('const errText = errMsgs[Math.floor(Math.random() * errMsgs.length)]');
 
 const report = {
   generatedAt: new Date().toISOString(),
@@ -68,6 +82,8 @@ const report = {
   rawOccurrences,
   runtimeGuardInstalled,
   disciplinedPhrasesInstalled,
+  privateSendSafetyInstalled,
+  commandErrorFallbackInstalled,
   details,
   note: 'Les occurrences brutes sont un inventaire de dette visuelle dans le source. Les text/caption réellement envoyés passent par le garde-fou central et extra.phrases passe par la palette active, sans modifier la logique métier.',
 };
@@ -79,7 +95,15 @@ console.log(
   ` fichiers_legacy=${report.filesWithLegacyDecoration}` +
   ` occurrences=${rawOccurrences}` +
   ` garde_fou=${runtimeGuardInstalled ? 'OK' : 'ABSENT'}` +
-  ` phrases=${disciplinedPhrasesInstalled ? 'OK' : 'ABSENT'}`
+  ` phrases=${disciplinedPhrasesInstalled ? 'OK' : 'ABSENT'}` +
+  ` privé=${privateSendSafetyInstalled ? 'OK' : 'ABSENT'}` +
+  ` erreurs=${commandErrorFallbackInstalled ? 'OK' : 'ABSENT'}`
 );
 
-if (syntaxFailures.length || !runtimeGuardInstalled || !disciplinedPhrasesInstalled) process.exitCode = 1;
+if (
+  syntaxFailures.length ||
+  !runtimeGuardInstalled ||
+  !disciplinedPhrasesInstalled ||
+  !privateSendSafetyInstalled ||
+  !commandErrorFallbackInstalled
+) process.exitCode = 1;
