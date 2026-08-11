@@ -28,7 +28,7 @@ module.exports = {
   usage: `${config.prefix || '.'}tagall <message>`,
   groupOnly: true,
   adminOnly: false, // Géré manuellement dans le code pour intégrer les Maîtres
-  botAdminNeeded: true,
+  botAdminNeeded: false, // Mentionner les membres ne nécessite pas les droits admin du bot
 
   async execute(sock, msg, args, extra) {
     const { reply, isOwner, isAdmin } = extra;
