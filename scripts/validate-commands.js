@@ -23,8 +23,24 @@ function commandFiles() {
 const files = commandFiles();
 const errors = [];
 const warnings = [];
-const names = new Map();
+const registrations = new Map();
 let commandCount = 0;
+
+function registerToken(token, owner) {
+  const normalized = String(token || '').trim().toLowerCase();
+  if (!normalized) return;
+
+  const previous = registrations.get(normalized);
+  if (previous) {
+    errors.push(
+      `${owner.rel}: '${token}' (${owner.kind} de '${owner.commandName}') collisionne avec ` +
+      `${previous.rel} (${previous.kind} de '${previous.commandName}')`
+    );
+    return;
+  }
+
+  registrations.set(normalized, owner);
+}
 
 for (const entry of files) {
   const rel = path.relative(ROOT, entry.filePath);
@@ -56,11 +72,11 @@ for (const entry of files) {
       continue;
     }
 
-    if (names.has(canonical) && names.get(canonical) !== rel) {
-      errors.push(`${rel}: nom '${canonical}' déjà déclaré dans ${names.get(canonical)}`);
-    } else {
-      names.set(canonical, rel);
-    }
+    registerToken(canonical, {
+      rel,
+      kind: 'nom',
+      commandName: canonical,
+    });
 
     if (command.aliases != null && !Array.isArray(command.aliases)) {
       errors.push(`${rel}: aliases de '${canonical}' doit être un tableau`);
@@ -70,11 +86,11 @@ for (const entry of files) {
     for (const rawAlias of command.aliases || []) {
       const alias = String(rawAlias || '').trim();
       if (!alias) continue;
-      if (names.has(alias) && names.get(alias) !== rel) {
-        errors.push(`${rel}: alias '${alias}' de '${canonical}' collisionne avec ${names.get(alias)}`);
-      } else {
-        names.set(alias, rel);
-      }
+      registerToken(alias, {
+        rel,
+        kind: 'alias',
+        commandName: canonical,
+      });
     }
   }
 
