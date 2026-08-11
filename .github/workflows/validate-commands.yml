@@ -19,7 +19,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
       - name: Install production dependencies
         run: npm install --omit=dev
@@ -28,12 +27,15 @@ jobs:
         run: node --test tests/category-menu.test.js
 
       - name: Validate all commands
+        if: always()
         run: npm run validate:commands
 
       - name: Audit every command four times
+        if: always()
         run: npm run audit:commands:4x
 
       - name: Audit every configured menu image URL
+        if: always()
         run: npm run audit:menu-images
 
       - name: Upload audit reports
