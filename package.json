@@ -14,6 +14,7 @@
     "start:multi": "node --expose-gc index.js",
     "start:railway": "node --expose-gc index.js",
     "test": "node --test tests/",
+    "validate:commands": "node scripts/validate-commands.js",
     "migrate:hybrid": "node scripts/migrate-sessions-to-hybrid.js"
   },
   "keywords": [
