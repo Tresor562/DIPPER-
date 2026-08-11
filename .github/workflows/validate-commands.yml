@@ -22,6 +22,9 @@ jobs:
       - name: Install production dependencies
         run: npm install --omit=dev
 
+      - name: Test direct category menu phrases
+        run: node --test tests/category-menu.test.js
+
       - name: Validate all commands
         run: npm run validate:commands
 
