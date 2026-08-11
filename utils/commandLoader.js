@@ -3,6 +3,8 @@ const path = require('path');
 
 let _commandsCache = null;
 
+const normalizeToken = (value) => String(value || '').trim().toLowerCase();
+
 const loadCommands = (forceReload = false) => {
   // [PERF] Cache en mémoire : ne charger qu'une seule fois au démarrage
   // sauf si forceReload=true (appelé par .reload)
@@ -39,23 +41,33 @@ const loadCommands = (forceReload = false) => {
         commandList.forEach(command => {
           // Ne traiter que les vrais objets commande (name + execute)
           if (command && typeof command === 'object' && command.name && typeof command.execute === 'function') {
+            // Le handler normalise toujours le token reçu en minuscules avant
+            // commands.get(). Le loader doit donc enregistrer noms et aliases
+            // avec exactement la même règle, sinon une commande telle que
+            // `muteDark` devient impossible à atteindre (`mutedark` côté handler).
+            const nameKey = normalizeToken(command.name);
+            if (!nameKey) return;
+
             // [FIX ROOT CAUSE] Un nom déjà pris était silencieusement écrasé, et un
             // alias déjà pris était silencieusement ignoré, sans aucun log. C'est ce
             // silence qui avait laissé passer la collision mediatag/tagmedia entre
             // mediatag.js et mentstats.js. On logge maintenant systématiquement
             // toute collision de nom OU d'alias pour qu'elle apparaisse au démarrage
             // au lieu de dépendre d'un audit manuel.
-            if (commands.has(command.name)) {
-              const previous = commands.get(command.name);
+            if (commands.has(nameKey)) {
+              const previous = commands.get(nameKey);
               console.warn(`[commandLoader] ⚠️ Collision de nom '${command.name}' : ${category}/${file} écrase une commande déjà enregistrée (description précédente: "${previous.description}"). Vérifier lequel des deux doit rester.`);
             }
-            commands.set(command.name, command);
+            commands.set(nameKey, command);
+
             if (Array.isArray(command.aliases)) {
               command.aliases.forEach(alias => {
-                if (alias && commands.has(alias) && commands.get(alias) !== command) {
-                  console.warn(`[commandLoader] ⚠️ Collision d'alias '${alias}' : ${category}/${file} (commande '${command.name}') ne peut pas le prendre, déjà utilisé par '${commands.get(alias).name}'.`);
-                } else if (alias && !commands.has(alias)) {
-                  commands.set(alias, command);
+                const aliasKey = normalizeToken(alias);
+                if (!aliasKey) return;
+                if (commands.has(aliasKey) && commands.get(aliasKey) !== command) {
+                  console.warn(`[commandLoader] ⚠️ Collision d'alias '${alias}' : ${category}/${file} (commande '${command.name}') ne peut pas le prendre, déjà utilisé par '${commands.get(aliasKey).name}'.`);
+                } else if (!commands.has(aliasKey)) {
+                  commands.set(aliasKey, command);
                 }
               });
             }
@@ -80,4 +92,3 @@ const loadCommands = (forceReload = false) => {
 };
 
 module.exports = { loadCommands };
-
