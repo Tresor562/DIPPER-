@@ -41,6 +41,35 @@ test('une session déjà réellement en ligne reste protégée contre le doublon
   );
 });
 
+test('une session registered qui redevient en ligne est reconnue comme reconnectée sans effacer ses creds', async () => {
+  process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://test';
+
+  const db = {};
+  let current = null;
+  let deleted = 0;
+  let stopped = 0;
+
+  mongoClient.getDb = async () => db;
+  sessionManager.getSession = () => current;
+  sessionManager.startSession = async () => {
+    current = { isOnline: false, isRegistered: true };
+    setTimeout(() => { if (current) current.isOnline = true; }, 20);
+    return current;
+  };
+  sessionManager.stopSession = async () => { stopped++; return true; };
+  fileAuthState.deleteSessionFiles = async () => { deleted++; };
+
+  const result = await pairingService.createPairingSession('22997000002');
+
+  assert.deepEqual(result, {
+    sessionId: 'session_22997000002',
+    pairingCode: null,
+    reconnected: true,
+  });
+  assert.equal(stopped, 0);
+  assert.equal(deleted, 0);
+});
+
 test('des creds registered mais hors ligne sont réinitialisés puis un nouveau code est généré', async () => {
   process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://test';
 
