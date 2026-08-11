@@ -26,9 +26,11 @@
 
 'use strict';
 
-const { getDb } = require('./mongoClient');
+const mongoClient = require('./mongoClient');
 const sessionManager = require('./sessionManager');
 const sessionContext = require('./sessionContext');
+const fileAuthState = require('./fileAuthState');
+const sessionIndex = require('./sessionIndex');
 
 /**
  * Erreur typée — le canal appelant peut lire `err.code` pour choisir le
@@ -49,6 +51,12 @@ class PairingError extends Error {
 // même identifiant demandeur existerait sous deux sessions différentes.
 const PAIRING_COOLDOWN_MS = 30 * 1000;
 const _cooldowns = new Map();
+
+// Une session dont les creds indiquent `registered: true` n'est pas forcément
+// réellement reconnectée. On laisse donc un court délai au socket pour passer
+// à `isOnline=true` avant de décider qu'il faut refaire le pairing.
+const RECONNECT_GRACE_MS = 12 * 1000;
+const RECONNECT_POLL_MS = 250;
 
 function checkAndSetCooldown(requesterKey) {
   if (!requesterKey) return 0; // pas de clé fournie → pas de limitation possible
@@ -72,6 +80,53 @@ function normalizeNumber(rawNumber) {
   return String(rawNumber || '').replace(/\D/g, '');
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Attend une vraie ouverture de socket. Important : `creds.registered` veut
+ * seulement dire que des credentials existent ; cela ne prouve pas que la
+ * session est encore acceptée par WhatsApp ni qu'elle est actuellement en
+ * ligne.
+ */
+async function waitForSessionOnline(phoneNumber, timeoutMs = RECONNECT_GRACE_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = sessionManager.getSession(phoneNumber);
+    if (current?.isOnline) return true;
+    await sleep(RECONNECT_POLL_MS);
+  }
+  return !!sessionManager.getSession(phoneNumber)?.isOnline;
+}
+
+/**
+ * Réinitialise uniquement une session enregistrée qui n'a pas réussi à
+ * redevenir réellement en ligne pendant la fenêtre de grâce. L'utilisateur
+ * a explicitement demandé un pairing/re-pairing : on ferme donc le socket
+ * hors ligne, retire ses credentials devenus inutilisables, remet l'index à
+ * l'état non enregistré, puis crée un socket vierge capable de fournir un
+ * nouveau code.
+ */
+async function resetDisconnectedRegisteredSession(db, cleanNumber, meta) {
+  const sessionId = sessionManager.toSessionId(cleanNumber);
+
+  try { await sessionManager.stopSession(cleanNumber); } catch (_) {}
+  await fileAuthState.deleteSessionFiles(sessionId);
+  try {
+    await sessionIndex.setState(sessionId, { isOnline: false, isRegistered: false });
+  } catch (_) {
+    // Mongo a déjà été vérifié au début du flux ; une erreur transitoire ici
+    // ne doit pas empêcher le nouveau pairing WhatsApp.
+  }
+
+  return sessionManager.startSession(db, cleanNumber, {
+    isPairing: true,
+    owner: meta.owner,
+    origin: meta.origin,
+  });
+}
+
 /**
  * createPairingSession — crée (ou reconnecte) une session multi-utilisateur
  * et retourne le code à afficher.
@@ -91,8 +146,8 @@ function normalizeNumber(rawNumber) {
  *       bot Telegram et le site Web, le précise toujours explicitement,
  *       voir api/server.js).
  * @returns {Promise<{ sessionId: string, pairingCode: string|null, reconnected: boolean }>}
- *   `pairingCode` est `null` si `reconnected` est `true` (session déjà
- *   appairée, aucun nouveau code à saisir).
+ *   `pairingCode` est `null` si `reconnected` est `true` (session réellement
+ *   reconnectée avec succès, aucun nouveau code à saisir).
  * @throws {PairingError} codes possibles :
  *   INVALID_NUMBER, COOLDOWN, ALREADY_ACTIVE, NO_MONGODB, CODE_FAILED
  */
@@ -130,7 +185,7 @@ async function createPairingSession(phoneNumber, options = {}) {
 
   let db;
   try {
-    db = await getDb();
+    db = await mongoClient.getDb();
   } catch (err) {
     // [Chantier Pairing/stabilisation] Avant ce correctif, une erreur de
     // connexion MongoDB (mauvais URI, identifiants, IP non whitelistée,
@@ -150,14 +205,33 @@ async function createPairingSession(phoneNumber, options = {}) {
     throw new PairingError('CODE_FAILED', `Échec de création de la session : ${err.message}`);
   }
 
-  // ── Reconnexion : des identifiants existaient déjà (numéro déjà appairé
-  // précédemment) — pas besoin d'un nouveau code, la session vient de se
-  // reconnecter avec ses creds MongoDB existants.
+  // ── Reconnexion réelle : `registered` signifie seulement que des creds
+  // existent. Avant ce correctif, on renvoyait immédiatement `reconnected`
+  // ici, même si le socket restait hors ligne ou si WhatsApp avait invalidé
+  // ces creds. Désormais on attend `connection === 'open'` via isOnline.
   if (session.isRegistered) {
-    return { sessionId, pairingCode: null, reconnected: true };
+    const isReallyOnline = await waitForSessionOnline(cleanNumber);
+    if (isReallyOnline) {
+      return { sessionId, pairingCode: null, reconnected: true };
+    }
+
+    // L'utilisateur a demandé explicitement une reconnexion mais les anciens
+    // creds n'ont pas permis de revenir en ligne : repartir proprement sur un
+    // auth state vierge afin de générer un nouveau code au lieu de répondre
+    // à tort "déjà appairé".
+    try {
+      session = await resetDisconnectedRegisteredSession(db, cleanNumber, { owner, origin });
+    } catch (err) {
+      throw new PairingError('CODE_FAILED', `Échec de réinitialisation de la session : ${err.message}`);
+    }
   }
 
-  // ── Nouvelle session : demander le code de pairing.
+  // ── Nouvelle session (ou ancienne session réinitialisée) : demander le
+  // code uniquement si le nouvel auth state n'est pas déjà enregistré.
+  if (session.isRegistered) {
+    throw new PairingError('CODE_FAILED', 'La session reste enregistrée mais ne parvient pas à se reconnecter. Réessaie dans un instant.');
+  }
+
   try {
     const pairingCode = await sessionManager.requestPairingCode(cleanNumber);
     return { sessionId, pairingCode, reconnected: false };
