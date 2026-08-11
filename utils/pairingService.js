@@ -30,6 +30,7 @@ const mongoClient = require('./mongoClient');
 const sessionManager = require('./sessionManager');
 const sessionContext = require('./sessionContext');
 const fileAuthState = require('./fileAuthState');
+const mongoAuth = require('./mongoAuth');
 const sessionIndex = require('./sessionIndex');
 
 /**
@@ -101,18 +102,53 @@ async function waitForSessionOnline(phoneNumber, timeoutMs = RECONNECT_GRACE_MS)
 }
 
 /**
+ * Supprime l'auth persistante de la session dans les deux backends possibles.
+ *
+ * - En développement/source, sessionManager peut encore utiliser les fichiers
+ *   locaux (utils/fileAuthState.js).
+ * - Sur Render, persistence-patch.js remplace ce backend par MongoDB
+ *   (utils/mongoAuth.js).
+ *
+ * Lorsqu'un utilisateur demande explicitement un re-pairing après l'échec
+ * d'une vraie reconnexion, conserver l'un des deux backends permettrait au
+ * prochain startSession() de recharger exactement les mêmes creds invalides.
+ * On nettoie donc les deux, mais uniquement après la fenêtre de reconnexion.
+ */
+async function clearPersistentAuth(db, sessionId) {
+  const failures = [];
+
+  try {
+    await fileAuthState.deleteSessionFiles(sessionId);
+  } catch (err) {
+    failures.push(`fichiers: ${err.message}`);
+  }
+
+  if (typeof mongoAuth.deleteMongoSession === 'function') {
+    try {
+      await mongoAuth.deleteMongoSession(db, sessionId);
+    } catch (err) {
+      failures.push(`mongo: ${err.message}`);
+    }
+  }
+
+  if (failures.length) {
+    throw new Error(`Nettoyage auth incomplet (${failures.join(' | ')})`);
+  }
+}
+
+/**
  * Réinitialise uniquement une session enregistrée qui n'a pas réussi à
  * redevenir réellement en ligne pendant la fenêtre de grâce. L'utilisateur
  * a explicitement demandé un pairing/re-pairing : on ferme donc le socket
- * hors ligne, retire ses credentials devenus inutilisables, remet l'index à
- * l'état non enregistré, puis crée un socket vierge capable de fournir un
- * nouveau code.
+ * hors ligne, retire ses credentials devenus inutilisables dans le backend
+ * réellement utilisé (fichiers et/ou Mongo), remet l'index à l'état non
+ * enregistré, puis crée un socket vierge capable de fournir un nouveau code.
  */
 async function resetDisconnectedRegisteredSession(db, cleanNumber, meta) {
   const sessionId = sessionManager.toSessionId(cleanNumber);
 
   try { await sessionManager.stopSession(cleanNumber); } catch (_) {}
-  await fileAuthState.deleteSessionFiles(sessionId);
+  await clearPersistentAuth(db, sessionId);
   try {
     await sessionIndex.setState(sessionId, { isOnline: false, isRegistered: false });
   } catch (_) {
@@ -217,7 +253,7 @@ async function createPairingSession(phoneNumber, options = {}) {
 
     // L'utilisateur a demandé explicitement une reconnexion mais les anciens
     // creds n'ont pas permis de revenir en ligne : repartir proprement sur un
-    // auth state vierge afin de générer un nouveau code au lieu de répondre
+    // auth state vierge afin de générérer un nouveau code au lieu de répondre
     // à tort "déjà appairé".
     try {
       session = await resetDisconnectedRegisteredSession(db, cleanNumber, { owner, origin });
