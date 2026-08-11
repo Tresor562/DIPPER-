@@ -7,6 +7,7 @@ const pairingService = require('../utils/pairingService');
 const sessionManager = require('../utils/sessionManager');
 const mongoClient = require('../utils/mongoClient');
 const fileAuthState = require('../utils/fileAuthState');
+const mongoAuth = require('../utils/mongoAuth');
 const sessionIndex = require('../utils/sessionIndex');
 
 const original = {
@@ -16,6 +17,7 @@ const original = {
   stopSession: sessionManager.stopSession,
   requestPairingCode: sessionManager.requestPairingCode,
   deleteSessionFiles: fileAuthState.deleteSessionFiles,
+  deleteMongoSession: mongoAuth.deleteMongoSession,
   setState: sessionIndex.setState,
 };
 
@@ -26,6 +28,7 @@ function restore() {
   sessionManager.stopSession = original.stopSession;
   sessionManager.requestPairingCode = original.requestPairingCode;
   fileAuthState.deleteSessionFiles = original.deleteSessionFiles;
+  mongoAuth.deleteMongoSession = original.deleteMongoSession;
   sessionIndex.setState = original.setState;
 }
 
@@ -46,7 +49,8 @@ test('une session registered qui redevient en ligne est reconnue comme reconnect
 
   const db = {};
   let current = null;
-  let deleted = 0;
+  let filesDeleted = 0;
+  let mongoDeleted = 0;
   let stopped = 0;
 
   mongoClient.getDb = async () => db;
@@ -57,7 +61,8 @@ test('une session registered qui redevient en ligne est reconnue comme reconnect
     return current;
   };
   sessionManager.stopSession = async () => { stopped++; return true; };
-  fileAuthState.deleteSessionFiles = async () => { deleted++; };
+  fileAuthState.deleteSessionFiles = async () => { filesDeleted++; };
+  mongoAuth.deleteMongoSession = async () => { mongoDeleted++; };
 
   const result = await pairingService.createPairingSession('22997000002');
 
@@ -67,17 +72,19 @@ test('une session registered qui redevient en ligne est reconnue comme reconnect
     reconnected: true,
   });
   assert.equal(stopped, 0);
-  assert.equal(deleted, 0);
+  assert.equal(filesDeleted, 0);
+  assert.equal(mongoDeleted, 0);
 });
 
-test('des creds registered mais hors ligne sont réinitialisés puis un nouveau code est généré', async () => {
+test('des creds registered mais hors ligne sont supprimés des fichiers et de Mongo puis un nouveau code est généré', async () => {
   process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://test';
 
   const db = {};
   let current = null;
   let starts = 0;
   let stopped = 0;
-  let deleted = 0;
+  let filesDeleted = 0;
+  let mongoDeleted = 0;
   let resetIndexed = 0;
 
   mongoClient.getDb = async () => db;
@@ -90,7 +97,8 @@ test('des creds registered mais hors ligne sont réinitialisés puis un nouveau 
     return current;
   };
   sessionManager.stopSession = async () => { stopped++; current = null; return true; };
-  fileAuthState.deleteSessionFiles = async () => { deleted++; };
+  fileAuthState.deleteSessionFiles = async () => { filesDeleted++; };
+  mongoAuth.deleteMongoSession = async () => { mongoDeleted++; };
   sessionIndex.setState = async (_id, state) => {
     if (state?.isRegistered === false && state?.isOnline === false) resetIndexed++;
   };
@@ -105,6 +113,7 @@ test('des creds registered mais hors ligne sont réinitialisés puis un nouveau 
   });
   assert.equal(starts, 2);
   assert.equal(stopped, 1);
-  assert.equal(deleted, 1);
+  assert.equal(filesDeleted, 1);
+  assert.equal(mongoDeleted, 1);
   assert.equal(resetIndexed, 1);
 });
