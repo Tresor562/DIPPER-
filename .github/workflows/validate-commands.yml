@@ -53,6 +53,9 @@ jobs:
       - name: Audit legacy response decorations across all commands
         if: always()
         run: npm run audit:visual-responses
+      - name: Audit silent response risks across all commands
+        if: always()
+        run: npm run audit:silent-responses
       - name: Upload command reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -61,4 +64,5 @@ jobs:
           path: |
             command-audit-report.json
             response-style-audit.json
+            silent-response-audit.json
           if-no-files-found: warn
