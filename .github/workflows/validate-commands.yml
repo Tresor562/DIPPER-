@@ -38,18 +38,27 @@ jobs:
           node-version: '20'
       - name: Install production dependencies
         run: npm install --omit=dev
+      - name: Install response discipline in final handler
+        run: node scripts/install-response-style.js
       - name: Test direct category menu phrases
         run: node --test tests/category-menu.test.js
+      - name: Test all 21 disciplined response styles
+        run: node --test tests/response-style.test.js
       - name: Validate all commands
         if: always()
         run: npm run validate:commands
       - name: Audit every command four times
         if: always()
         run: npm run audit:commands:4x
-      - name: Upload command report
+      - name: Audit legacy response decorations across all commands
+        if: always()
+        run: npm run audit:visual-responses
+      - name: Upload command reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: command-audit-report
-          path: command-audit-report.json
+          path: |
+            command-audit-report.json
+            response-style-audit.json
           if-no-files-found: warn
