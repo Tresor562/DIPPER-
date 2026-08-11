@@ -7,6 +7,7 @@ const {
   renderResponse,
   sanitizeLegacyText,
   decoratePayload,
+  getLegacyPhrases,
 } = require('../utils/responseStyle');
 
 const FORBIDDEN = /[╭╮╰╯┃║╔╗╚╝╠╣╦╩╬┌┐└┘│≪≫╼╾]/u;
@@ -27,6 +28,16 @@ for (let style = 0; style <= 20; style++) {
       assert.equal(FORBIDDEN.test(result), false, `${type}: ${result}`);
       assert.match(result, /Contenu utile/);
       assert.match(result, /TEST/);
+    }
+  });
+
+  test(`style ${style} garde les phrases legacy disciplinées`, () => {
+    const phrases = getLegacyPhrases(style);
+    for (const key of ['footer', 'error', 'wait', 'success', 'denied', 'groupOnly', 'adminOnly', 'botAdmin']) {
+      const value = phrases[key]();
+      assert.equal(typeof value, 'string');
+      assert.equal(FORBIDDEN.test(value), false, `${key}: ${value}`);
+      assert.ok(value.trim().length > 0, key);
     }
   });
 }
