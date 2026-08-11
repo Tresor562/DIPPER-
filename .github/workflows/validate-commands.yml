@@ -8,42 +8,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  validate:
+  menu-images:
+    name: Menu image links
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Install production dependencies
-        run: npm install --omit=dev
-
-      - name: Test direct category menu phrases
-        run: node --test tests/category-menu.test.js
-
-      - name: Validate all commands
-        if: always()
-        run: npm run validate:commands
-
-      - name: Audit every command four times
-        if: always()
-        run: npm run audit:commands:4x
-
       - name: Audit every configured menu image URL
-        if: always()
         run: npm run audit:menu-images
-
-      - name: Upload audit reports
+      - name: Upload image report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: big-dipper-audit-reports
-          path: |
-            command-audit-report.json
-            menu-image-audit.json
+          name: menu-image-audit
+          path: menu-image-audit.json
+          if-no-files-found: warn
+
+  commands:
+    name: Commands four-pass audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install production dependencies
+        run: npm install --omit=dev
+      - name: Test direct category menu phrases
+        run: node --test tests/category-menu.test.js
+      - name: Validate all commands
+        if: always()
+        run: npm run validate:commands
+      - name: Audit every command four times
+        if: always()
+        run: npm run audit:commands:4x
+      - name: Upload command report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: command-audit-report
+          path: command-audit-report.json
           if-no-files-found: warn
