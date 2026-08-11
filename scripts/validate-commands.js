@@ -32,6 +32,10 @@ function registerToken(token, owner) {
 
   const previous = registrations.get(normalized);
   if (previous) {
+    // Le vrai commandLoader tolère qu'une même commande répète son propre
+    // nom dans aliases (ou répète un alias). Seules deux commandes distinctes
+    // doivent être considérées en collision.
+    if (previous.ownerKey === owner.ownerKey) return;
     errors.push(
       `${owner.rel}: '${token}' (${owner.kind} de '${owner.commandName}') collisionne avec ` +
       `${previous.rel} (${previous.kind} de '${previous.commandName}')`
@@ -61,7 +65,8 @@ for (const entry of files) {
 
   const list = Array.isArray(exported) ? exported : [exported];
   let found = 0;
-  for (const command of list) {
+  for (let index = 0; index < list.length; index++) {
+    const command = list[index];
     if (!command || typeof command !== 'object' || !command.name || typeof command.execute !== 'function') continue;
     found++;
     commandCount++;
@@ -72,7 +77,9 @@ for (const entry of files) {
       continue;
     }
 
+    const ownerKey = `${rel}#${index}`;
     registerToken(canonical, {
+      ownerKey,
       rel,
       kind: 'nom',
       commandName: canonical,
@@ -87,6 +94,7 @@ for (const entry of files) {
       const alias = String(rawAlias || '').trim();
       if (!alias) continue;
       registerToken(alias, {
+        ownerKey,
         rel,
         kind: 'alias',
         commandName: canonical,
