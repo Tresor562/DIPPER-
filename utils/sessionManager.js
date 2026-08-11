@@ -58,6 +58,16 @@ const sessionContext = require('./sessionContext');
 // ── Logger silencieux ──────────────────────────────────────────────────────
 const silentLogger = pino({ level: 'silent' });
 
+// Les erreurs critiques de session doivent rester visibles même si index.js
+// filtre volontairement le bruit interne de Baileys dans console.*.
+function logCriticalSessionError(message) {
+  try {
+    process.stderr.write(`[SessionManager] ${message}\n`);
+  } catch {
+    console.warn(`[SessionManager] ${message}`);
+  }
+}
+
 // ── Map globale des sessions actives ──────────────────────────────────────
 // sessionId → { sock, sessionId, phoneNumber, timers: {}, processedMessages: Map }
 const activeSessions = new Map();
@@ -229,6 +239,9 @@ async function startSession(db, phoneNumber, opts = {}) {
       const shouldReconnect = !terminalDisconnect && !_isShuttingDown && !session.isStopping;
 
       console.log(`[SessionManager] 🔌 ${sessionId} déconnecté — code=${statusCode} | reconnexion=${shouldReconnect}`);
+      if (terminalDisconnect || /bad mac|session error|conflict|pair|auth/i.test(errorMessage)) {
+        logCriticalSessionError(`❗ ${sessionId} fermeture critique — code=${statusCode ?? '?'} — ${errorMessage}`);
+      }
       sessionIndex.setState(sessionId, { isOnline: false }).catch(() => {});
 
       if (shouldReconnect) {
@@ -496,11 +509,17 @@ async function requestPairingCode(phoneNumber, opts = {}) {
   if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
 
   const timeoutMs = opts.timeoutMs ?? 20000;
-  const raw = await withTimeout(
-    sock.requestPairingCode(String(phoneNumber).replace(/\D/g, '')),
-    timeoutMs,
-    'requestPairingCode'
-  );
+  let raw;
+  try {
+    raw = await withTimeout(
+      sock.requestPairingCode(String(phoneNumber).replace(/\D/g, '')),
+      timeoutMs,
+      'requestPairingCode'
+    );
+  } catch (err) {
+    logCriticalSessionError(`❗ pairing ${sessionId} échoué — ${err.message || err}`);
+    throw err;
+  }
   const code = raw?.match(/.{1,4}/g)?.join('-') || raw || '????-????';
   console.log(`[SessionManager] 🔑 Code pairing ${sessionId}: ${code}`);
   return code;
