@@ -99,14 +99,17 @@ for (const file of files) {
     if (usesFsWrite && !/unlink|rm\(|rmSync|cleanup|finally/i.test(source)) a3Notes.push('écriture temporaire sans nettoyage évident');
     const audit3 = result(a3Notes.length ? 'WARN' : 'PASS', a3Notes);
 
-    // AUDIT 4 — cohérence réelle avec commandLoader/handler et collisions.
+    // AUDIT 4 — cohérence exacte avec le handler, qui lower-case le token
+    // avant commands.get(). Ne pas accepter ici une clé MixedCase qui ne
+    // serait jamais atteinte depuis un vrai message utilisateur.
     const a4Notes = [];
-    const loadedByName = commandMap.get(name.toLowerCase()) || commandMap.get(name);
-    if (!loadedByName) a4Notes.push('nom non résolu par commandLoader');
+    const loadedByName = commandMap.get(name.toLowerCase());
+    if (!loadedByName) a4Notes.push('nom non routable après lower-case du handler');
     else if (loadedByName.name !== cmd.name) a4Notes.push(`nom routé vers ${loadedByName.name}`);
     for (const alias of aliases) {
-      const target = commandMap.get(alias.toLowerCase()) || commandMap.get(alias);
-      if (target && target.name !== cmd.name) a4Notes.push(`alias ${alias} routé vers ${target.name}`);
+      const target = commandMap.get(alias.toLowerCase());
+      if (!target) a4Notes.push(`alias ${alias} non routable après lower-case du handler`);
+      else if (target.name !== cmd.name) a4Notes.push(`alias ${alias} routé vers ${target.name}`);
     }
 
     const tokens = [name, ...aliases].map(v => v.toLowerCase());
