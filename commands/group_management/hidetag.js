@@ -29,7 +29,7 @@ module.exports = {
   usage: `${config.prefix || '.'}hidetag <texte/media>`,
   groupOnly: true,
   adminOnly: false, // Géré manuellement ci-dessous pour intégrer les Maîtres
-  botAdminNeeded: true,
+  botAdminNeeded: false, // Mentionner les membres ne nécessite pas les droits admin du bot
 
   async execute(sock, msg, args, extra) {
     const { reply, isOwner, isAdmin } = extra;
@@ -46,11 +46,12 @@ module.exports = {
 
       const chatId = msg.key.remoteJid;
 
-      // 🛠️ FIX 1 : ON SUPPRIME LA COMMANDE IMMÉDIATEMENT POUR LA DISCRÉTION
+      // La suppression du message de commande est seulement esthétique.
+      // Sans droits admin elle peut échouer, mais le hidetag doit quand même partir.
       try {
         await sock.sendMessage(chatId, { delete: msg.key });
       } catch (deleteError) {
-        console.error('Impossible de supprimer le message hidetag:', deleteError);
+        console.log('[hidetag] Suppression ignorée (bot non-admin ou message non supprimable):', deleteError.message);
       }
 
       // Récupération des membres
@@ -80,10 +81,9 @@ module.exports = {
         targetMessage.message?.videoMessage ||
         targetMessage.message?.stickerMessage;
 
-      // 🛠️ FIX 2 : On retire partout `{ quoted: msg }` pour ne pas citer le message supprimé !
-
+      // On ne quote jamais le message de commande : s'il a été supprimé,
+      // citer sa clé peut faire rejeter l'envoi sur certaines sessions.
       if (mediaMessage) {
-        // Téléchargement et renvoi du média avec mentions
         try {
           const mediaBuffer = await downloadMediaMessage(
             targetMessage,
@@ -112,7 +112,6 @@ module.exports = {
               mentions
             });
 
-            // Si du texte accompagne le sticker, l'envoyer séparément
             const text = args.join(' ');
             if (text) {
               await sock.sendMessage(chatId, { text, mentions });
@@ -120,12 +119,10 @@ module.exports = {
           }
         } catch (mediaError) {
           console.error('Error downloading media for hidetag:', mediaError);
-          // Secours en texte simple avec mentions en cas de bug de téléchargement
           const text = args.join(' ') || ' ';
           await sock.sendMessage(chatId, { text, mentions });
         }
       } else {
-        // Si c'est une réponse à un message texte brut
         if (ctxInfo?.quotedMessage) {
           const quotedText = ctxInfo.quotedMessage.conversation || 
                            ctxInfo.quotedMessage.extendedTextMessage?.text || 
@@ -133,14 +130,12 @@ module.exports = {
 
           await sock.sendMessage(chatId, { text: quotedText, mentions });
         } else {
-          // Message texte simple
           const text = args.join(' ') || ' ';
           await sock.sendMessage(chatId, { text, mentions });
         }
       }
     } catch (error) {
       console.error('HideTag command error:', error);
-      // Ici on utilise reply car l'erreur doit être notifiée si l'envoi a raté
       await reply(
         `*╭╼━━━≪• ɪɴᴠᴏᴄᴀᴛɪᴏɴ_sɪʟᴇɴᴄɪᴇᴜsᴇ •≫━━━╾╮*\n` +
         `*┃* *ᴇ́ᴛᴀᴛ* : [ ᴇ́ᴄʜᴇᴄ ❌ ]\n\n` +
