@@ -8,7 +8,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,3 +24,19 @@ jobs:
 
       - name: Validate all commands
         run: npm run validate:commands
+
+      - name: Audit every command four times
+        run: npm run audit:commands:4x
+
+      - name: Audit every configured menu image URL
+        run: npm run audit:menu-images
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: big-dipper-audit-reports
+          path: |
+            command-audit-report.json
+            menu-image-audit.json
+          if-no-files-found: warn
