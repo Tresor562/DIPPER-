@@ -118,7 +118,7 @@ async function startSession(db, phoneNumber, opts = {}) {
   // ── Nettoyer l'ancienne session si elle existe ─────────────────────────
   if (activeSessions.has(sessionId)) {
     const old = activeSessions.get(sessionId);
-    _cleanupSession(old);
+    _closeSession(old, 'session remplacée');
     activeSessions.delete(sessionId);
   }
 
@@ -182,6 +182,7 @@ async function startSession(db, phoneNumber, opts = {}) {
     reconnectAttempts: 0,
     isOnline: false,
     isRegistered: !!state.creds.registered, // [PHASE 3] déjà appairé (reconnexion) vs nouvelle session
+    isStopping: false,
     createdAt: Date.now(), // [PHASE 4D] pour le nettoyage des sessions orphelines (voir startOrphanSessionSweep)
   };
   activeSessions.set(sessionId, session);
@@ -220,7 +221,7 @@ async function startSession(db, phoneNumber, opts = {}) {
 
       const statusCode      = lastDisconnect?.error?.output?.statusCode;
       const errorMessage    = lastDisconnect?.error?.message || 'inconnue';
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut && !_isShuttingDown;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut && !_isShuttingDown && !session.isStopping;
 
       console.log(`[SessionManager] 🔌 ${sessionId} déconnecté — code=${statusCode} | reconnexion=${shouldReconnect}`);
       sessionIndex.setState(sessionId, { isOnline: false }).catch(() => {});
@@ -341,6 +342,20 @@ function _clearSessionTimers(session) {
 }
 
 /**
+ * Nettoie l'état local puis ferme réellement le socket Baileys sans logout.
+ * `sock.end()` coupe la connexion mais conserve les credentials pour une
+ * reconnexion ultérieure. Le flag isStopping empêche ce close volontaire de
+ * déclencher une nouvelle reconnexion automatique.
+ */
+function _closeSession(session, reason = 'session arrêtée') {
+  if (!session) return;
+  session.isStopping = true;
+  _cleanupSession(session);
+  try { session.sock?.end?.(new Error(reason)); } catch {}
+  try { session.sock?.ev?.removeAllListeners?.(); } catch {}
+}
+
+/**
  * Destruction complète d'une session (timers + intervals de nettoyage).
  */
 function _cleanupSession(session) {
@@ -405,18 +420,13 @@ function getAllSessions() {
 }
 
 /**
- * Arrête proprement une session.
- * [Inchangé — Phase 2] Déconnecte et retire la session de la mémoire, mais
- * NE supprime PAS ses credentials (fichiers locaux) ni son entrée d'index
- * Mongo — comportement identique à l'ancien stopSession() (qui ne supprimait
- * pas non plus la collection Mongo `auth_*`), pour permettre une
- * reconnexion future. Seul l'état `isOnline` de l'index est mis à jour.
+ * Arrête proprement une session sans supprimer ses credentials.
  */
 async function stopSession(phoneNumber) {
   const sessionId = toSessionId(phoneNumber);
   const session   = activeSessions.get(sessionId);
   if (!session) return false;
-  _cleanupSession(session);
+  _closeSession(session, 'session arrêtée');
   activeSessions.delete(sessionId);
   sessionIndex.setState(sessionId, { isOnline: false }).catch(() => {});
   console.log(`[SessionManager] 🛑 Session ${sessionId} arrêtée`);
