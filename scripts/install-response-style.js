@@ -64,11 +64,23 @@ if (!handler.includes(WATCH_MARKER)) {
   console.log('[response-style] watchdog anti-silence installé');
 }
 
-// Le catch global utilisait errText sans l'avoir défini.
+// Le catch global doit définir errText une seule fois. runtime-core-fix.js
+// peut déjà avoir installé la déclaration avant cet installateur : dans ce
+// cas on marque la déclaration existante au lieu d'en créer une seconde.
 if (!handler.includes(ERROR_MARKER)) {
-  const anchor = `    const destJid   = msg?.key?.remoteJid;`;
-  const replacement = `    const errText = errMsgs[Math.floor(Math.random() * errMsgs.length)]; // ${ERROR_MARKER}\n    const destJid   = msg?.key?.remoteJid;`;
-  handler = replaceOnce(handler, anchor, replacement, 'message erreur commande');
+  const existingErrText = `    const errText = errMsgs[Math.floor(Math.random() * errMsgs.length)];`;
+  if (handler.includes(existingErrText)) {
+    handler = replaceOnce(
+      handler,
+      existingErrText,
+      `${existingErrText} // ${ERROR_MARKER}`,
+      'marquage errText existant'
+    );
+  } else {
+    const anchor = `    const destJid   = msg?.key?.remoteJid;`;
+    const replacement = `    const errText = errMsgs[Math.floor(Math.random() * errMsgs.length)]; // ${ERROR_MARKER}\n    const destJid   = msg?.key?.remoteJid;`;
+    handler = replaceOnce(handler, anchor, replacement, 'message erreur commande');
+  }
 }
 
 fs.writeFileSync(handlerPath, handler);
@@ -96,6 +108,11 @@ const required = [
 ];
 for (const marker of required) {
   if (!finalHandler.includes(marker)) throw new Error(`[response-style] garde-fou absent: ${marker}`);
+}
+
+const errTextDeclarations = (finalHandler.match(/const errText\s*=\s*errMsgs\[/g) || []).length;
+if (errTextDeclarations !== 1) {
+  throw new Error(`[response-style] errText doit être déclaré exactement une fois, trouvé ${errTextDeclarations}`);
 }
 
 console.log('[response-style] ✅ réponses silencieuses protégées');
