@@ -10,6 +10,7 @@ const files = {
   session: path.join(ROOT, 'utils', 'sessionManager.js'),
   index: path.join(ROOT, 'index.js'),
   menu: path.join(ROOT, 'commands', 'general_tools', 'menu.js'),
+  repere: path.join(ROOT, 'commands', 'bot_sovereignty', 'repere.js'),
   responseInstaller: path.join(ROOT, 'scripts', 'install-response-style.js'),
   runtimeInstaller: path.join(ROOT, 'scripts', 'install-command-runtime-fixes.js'),
 };
@@ -26,6 +27,7 @@ const handler = fs.readFileSync(files.handler, 'utf8');
 const session = fs.readFileSync(files.session, 'utf8');
 const index = fs.readFileSync(files.index, 'utf8');
 const menu = fs.readFileSync(files.menu, 'utf8');
+const repere = fs.readFileSync(files.repere, 'utf8');
 
 const notifyAppendFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*&&\s*type\s*!==\s*['"]append['"]\s*\)\s*return\s*;/;
 const appendOwnGuard = /if\s*\(\s*type\s*===\s*['"]append['"]\s*&&\s*!msg\.key\.fromMe\s*\)\s*continue\s*;/;
@@ -37,6 +39,14 @@ function sliceRegion(source, startNeedle, endNeedle, label) {
     throw new Error(`[verify-runtime] ${label}: région introuvable`);
   }
   return source.slice(start, end);
+}
+
+function getAliases(source, label) {
+  const exportsPos = source.indexOf('module.exports = {');
+  if (exportsPos < 0) throw new Error(`[verify-runtime] module.exports ${label} absent`);
+  const aliasesMatch = source.slice(exportsPos).match(/aliases\s*:\s*\[([\s\S]*?)\]/m);
+  if (!aliasesMatch) throw new Error(`[verify-runtime] tableau aliases ${label} absent`);
+  return aliasesMatch[1];
 }
 
 // 1. Le watchdog doit reconnaître les deux primitives de réponse réellement
@@ -108,8 +118,10 @@ if (handler.includes('if (!config.public && access.reason === null)')) {
   throw new Error('[verify-runtime] ancien filtre semi-public silencieux encore présent');
 }
 
-// 4. Le menu utilise volontairement relayMessage pour l'interactif : cette
-// primitive doit donc être couverte par le watchdog ci-dessus.
+// 4. MENU / ALLMENU — routage + livraison visible.
+// Le menu interactif peut utiliser relayMessage après les patches visuels ; le
+// watchdog doit donc le suivre. `allmenu`, lui, doit garder une branche dédiée
+// qui envoie effectivement chaque chunk avec sendMessage.
 if (!menu.includes('sendStyledMenuMessage')) {
   throw new Error('[verify-runtime] expéditeur menu unifié absent');
 }
@@ -117,14 +129,40 @@ if (!menu.includes('sock.relayMessage')) {
   throw new Error('[verify-runtime] relayMessage menu attendu mais absent');
 }
 
-// menu et allmenu doivent router vers le même module de commande.
-const exportsPos = menu.indexOf('module.exports = {');
-if (exportsPos < 0) throw new Error('[verify-runtime] module.exports menu absent');
-const aliasesMatch = menu.slice(exportsPos).match(/aliases\s*:\s*\[([\s\S]*?)\]/m);
-if (!aliasesMatch) throw new Error('[verify-runtime] tableau aliases menu absent');
-const aliasBody = aliasesMatch[1];
-if (!/['"]menu['"]/.test(aliasBody) || !/['"]allmenu['"]/.test(aliasBody)) {
+const menuAliases = getAliases(menu, 'menu');
+if (!/['"]menu['"]/.test(menuAliases) || !/['"]allmenu['"]/.test(menuAliases)) {
   throw new Error('[verify-runtime] menu/allmenu ne routent pas vers le même module');
 }
+if (!/if\s*\(\s*body\s*===\s*['"]allmenu['"]\s*\)/.test(menu)) {
+  throw new Error('[verify-runtime] branche execute allmenu absente');
+}
+if (!menu.includes('buildAllMenuChunks') || !menu.includes('await sock.sendMessage(')) {
+  throw new Error('[verify-runtime] livraison visible allmenu absente');
+}
 
-console.log('[verify-runtime] ✅ vérification structurelle: menu/allmenu, pending/relay, append(fromMe) et permissions validés');
+// 5. REPERE / REPÈRE — même commande, même sécurité, double chemin de
+// livraison. L'accent doit être déclaré explicitement car commandLoader met en
+// minuscules mais ne supprime pas les accents.
+if (!/name\s*:\s*['"]repere['"]/.test(repere)) {
+  throw new Error('[verify-runtime] commande repere canonique absente');
+}
+const repereAliases = getAliases(repere, 'repere');
+for (const alias of ['rep', 'repère']) {
+  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!new RegExp(`['"]${escaped}['"]`).test(repereAliases)) {
+    throw new Error(`[verify-runtime] alias ${alias} absent de repere`);
+  }
+}
+if (!/ownerOnly\s*:\s*true/.test(repere)) {
+  throw new Error('[verify-runtime] protection ownerOnly de repere absente');
+}
+for (const marker of [
+  'sendInteractiveRepere',
+  'await sock.relayMessage(',
+  'fallbackText',
+  'await sock.sendMessage(',
+]) {
+  if (!repere.includes(marker)) throw new Error(`[verify-runtime] livraison repere incomplète: ${marker}`);
+}
+
+console.log('[verify-runtime] ✅ menu/allmenu + repere/repère, send/relay/pending, append(fromMe) et permissions validés');
