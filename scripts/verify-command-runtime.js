@@ -27,6 +27,18 @@ const session = fs.readFileSync(files.session, 'utf8');
 const index = fs.readFileSync(files.index, 'utf8');
 const menu = fs.readFileSync(files.menu, 'utf8');
 
+const notifyAppendFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*&&\s*type\s*!==\s*['"]append['"]\s*\)\s*return\s*;/;
+const appendOwnGuard = /if\s*\(\s*type\s*===\s*['"]append['"]\s*&&\s*!msg\.key\.fromMe\s*\)\s*continue\s*;/;
+
+function sliceRegion(source, startNeedle, endNeedle, label) {
+  const start = source.indexOf(startNeedle);
+  const end = start < 0 ? -1 : source.indexOf(endNeedle, start);
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error(`[verify-runtime] ${label}: région introuvable`);
+  }
+  return source.slice(start, end);
+}
+
 // 1. Le watchdog doit reconnaître les deux primitives de réponse réellement
 // utilisées par les commandes : sendMessage et relayMessage, y compris les
 // anciennes commandes qui ne font pas await sur leur envoi.
@@ -53,17 +65,29 @@ if (!handler.includes('!message.protocolMessage') || !handler.includes('!message
 }
 
 // 2. Les sessions appairées doivent avoir la même politique upsert que le
-// socket principal : notify + append uniquement pour fromMe.
-for (const src of [session, index]) {
-  if (!src.includes("type !== 'notify' && type !== 'append'")) {
-    throw new Error('[verify-runtime] filtre notify/append absent');
-  }
-  if (!src.includes("type === 'append' && !msg.key.fromMe")) {
-    throw new Error('[verify-runtime] protection append non-fromMe absente');
-  }
+// socket principal : notify + append uniquement pour fromMe. On vérifie la
+// structure, pas la mise en forme exacte produite par les patches précédents.
+const sessionMessages = sliceRegion(
+  session,
+  '// ─── MESSAGES (handler principal)',
+  '// ─── GROUP UPDATES',
+  'listener messages session'
+);
+
+if (!notifyAppendFilter.test(sessionMessages)) {
+  throw new Error('[verify-runtime] filtre notify/append absent du listener session principal');
 }
-if (!session.includes('[SESSION OWN APPEND ROUTING]')) {
+if (!appendOwnGuard.test(sessionMessages)) {
+  throw new Error('[verify-runtime] protection append non-fromMe absente du listener session principal');
+}
+if (!sessionMessages.includes('[SESSION OWN APPEND ROUTING]')) {
   throw new Error('[verify-runtime] marqueur append multi-session absent');
+}
+if (!notifyAppendFilter.test(index)) {
+  throw new Error('[verify-runtime] filtre notify/append absent du socket principal');
+}
+if (!appendOwnGuard.test(index)) {
+  throw new Error('[verify-runtime] protection append non-fromMe absente du socket principal');
 }
 
 // 3. checkAccess reste la source de vérité. Le vieux deuxième filtre public
@@ -103,4 +127,4 @@ if (!/['"]menu['"]/.test(aliasBody) || !/['"]allmenu['"]/.test(aliasBody)) {
   throw new Error('[verify-runtime] menu/allmenu ne routent pas vers le même module');
 }
 
-console.log('[verify-runtime] ✅ menu/allmenu, pending/relay watchdog, groupes append et permissions validés');
+console.log('[verify-runtime] ✅ vérification structurelle: menu/allmenu, pending/relay, append(fromMe) et permissions validés');
