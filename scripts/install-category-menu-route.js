@@ -8,24 +8,39 @@ const ROOT = path.join(__dirname, '..');
 const handlerPath = path.join(ROOT, 'handler.js');
 const menuPath = path.join(ROOT, 'commands', 'general_tools', 'menu.js');
 const marker = '[CATEGORY MENU PHRASE]';
-const allMenuMarker = "'allmenu'";
 
-// `allmenu` faisait partie de l'interface historique du menu. Le restaurer
-// comme simple alias du même module évite une deuxième implémentation et
-// conserve exactement les mêmes permissions/rendu/navigation que `.menu`.
+function findMenuAliasesRegion(source) {
+  const exportStart = source.indexOf('module.exports = {');
+  if (exportStart < 0) throw new Error('[category-menu] module.exports du menu introuvable');
+
+  const aliasesKey = source.indexOf('aliases:', exportStart);
+  if (aliasesKey < 0) throw new Error('[category-menu] tableau aliases du menu introuvable');
+
+  const open = source.indexOf('[', aliasesKey);
+  if (open < 0) throw new Error('[category-menu] ouverture du tableau aliases introuvable');
+
+  const close = source.indexOf(']', open);
+  if (close < 0) throw new Error('[category-menu] fermeture du tableau aliases introuvable');
+
+  return { open, close, body: source.slice(open + 1, close) };
+}
+
+function hasAllMenuAlias(source) {
+  const region = findMenuAliasesRegion(source);
+  return /['"]allmenu['"]/.test(region.body);
+}
+
+// `allmenu` fait partie de l'interface historique du menu. On l'installe
+// directement dans module.exports.aliases, sans se fier à une occurrence du
+// mot ailleurs dans le fichier ni à une mise en forme particulière.
 let menu = fs.readFileSync(menuPath, 'utf8');
-if (!menu.includes(allMenuMarker)) {
-  const aliasAnchor = "  aliases: ['commands','menu','index','m','ɢʀɪᴍᴏɪʀᴇ',";
-  const aliasReplacement = "  aliases: ['commands','menu','allmenu','index','m','ɢʀɪᴍᴏɪʀᴇ',";
-  const aliasCount = menu.split(aliasAnchor).length - 1;
-  if (aliasCount !== 1) {
-    throw new Error(`[category-menu] alias menu attendu 1 fois, trouvé ${aliasCount}`);
-  }
-  menu = menu.replace(aliasAnchor, aliasReplacement);
+if (!hasAllMenuAlias(menu)) {
+  const { open } = findMenuAliasesRegion(menu);
+  menu = menu.slice(0, open + 1) + "'allmenu'," + menu.slice(open + 1);
   fs.writeFileSync(menuPath, menu);
-  console.log('[category-menu] alias allmenu restauré');
+  console.log('[category-menu] alias allmenu restauré dans module.exports.aliases');
 } else {
-  console.log('[category-menu] alias allmenu déjà présent');
+  console.log('[category-menu] alias allmenu déjà présent dans module.exports.aliases');
 }
 
 let handler = fs.readFileSync(handlerPath, 'utf8');
@@ -54,8 +69,8 @@ for (const file of [handlerPath, menuPath]) {
 }
 
 const finalMenu = fs.readFileSync(menuPath, 'utf8');
-if (!finalMenu.includes("aliases: ['commands','menu','allmenu'")) {
-  throw new Error('[category-menu] alias allmenu absent après installation');
+if (!hasAllMenuAlias(finalMenu)) {
+  throw new Error('[category-menu] alias allmenu absent de module.exports.aliases après installation');
 }
 
 console.log('[category-menu] ✅ handler + menu prêts');
