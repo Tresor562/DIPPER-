@@ -41,6 +41,11 @@ function findMatchingBrace(source, openIndex) {
   return -1;
 }
 
+const notifyAppendFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*&&\s*type\s*!==\s*['"]append['"]\s*\)\s*return\s*;/;
+const notifyOnlyFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*\)\s*return\s*;/;
+const appendOwnGuard = /if\s*\(\s*type\s*===\s*['"]append['"]\s*&&\s*!msg\.key\.fromMe\s*\)\s*continue\s*;/;
+const validMessageGuard = /if\s*\(\s*!msg\.message\s*\|\|\s*!msg\.key\?\.id\s*\)\s*continue\s*;/;
+
 // ── 1) Sessions appairées : accepter les messages own-device en append ─────
 // Important : plusieurs patches Render s'exécutent AVANT cet installateur.
 // On ne dépend donc plus d'une mise en forme exacte de sessionManager.js : on
@@ -52,11 +57,6 @@ const SESSION_END = '// ─── GROUP UPDATES';
 
 let region = sliceRegion(sessionSrc, SESSION_START, SESSION_END, 'listener messages principal');
 let messageBlock = region.text;
-
-const notifyAppendFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*&&\s*type\s*!==\s*['"]append['"]\s*\)\s*return\s*;/;
-const notifyOnlyFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*\)\s*return\s*;/;
-const appendOwnGuard = /if\s*\(\s*type\s*===\s*['"]append['"]\s*&&\s*!msg\.key\.fromMe\s*\)\s*continue\s*;/;
-const validMessageGuard = /if\s*\(\s*!msg\.message\s*\|\|\s*!msg\.key\?\.id\s*\)\s*continue\s*;/;
 
 if (!notifyAppendFilter.test(messageBlock)) {
   const matches = messageBlock.match(new RegExp(notifyOnlyFilter.source, 'g')) || [];
@@ -157,11 +157,11 @@ if (!finalRegion.includes(APPEND_MARKER)) {
 }
 
 // Le main owner possède déjà ce comportement : on refuse toute divergence
-// entre mono-session et sessions appairées.
-if (!finalIndex.includes("type !== 'notify' && type !== 'append'")) {
+// entre mono-session et sessions appairées, sans dépendre des espaces/guillemets.
+if (!notifyAppendFilter.test(finalIndex)) {
   throw new Error('[command-runtime] régression: index.js n’accepte plus append');
 }
-if (!finalIndex.includes("type === 'append' && !msg.key.fromMe")) {
+if (!appendOwnGuard.test(finalIndex)) {
   throw new Error('[command-runtime] régression: index.js ne protège plus append non-fromMe');
 }
 
