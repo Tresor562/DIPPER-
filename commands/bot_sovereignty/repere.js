@@ -114,11 +114,14 @@ async function sendInteractiveRepere(sock, jid, caption, imageBuffer, quoted) {
 
 module.exports = {
   name: 'repere',
-  aliases: ['Repere', 'REPERE', 'rep'],
+  // Le loader normalise en minuscules mais conserve les accents : on déclare
+  // donc explicitement `repère` afin que .repere, .repère et .rep routent tous
+  // vers exactement le même objet commande.
+  aliases: ['Repere', 'REPERE', 'rep', 'repère'],
   category: '👑 Owner',
   ownerOnly: true,
   description: '『 NEXUS TECH 』➪ partage la chaîne officielle avec bouton direct',
-  usage: `${config.prefix || '.'}repere`,
+  usage: `${config.prefix || '.'}repere | ${config.prefix || '.'}repère | ${config.prefix || '.'}rep`,
 
   async execute(sock, msg, args, extra) {
     const { reply, isOwner, from } = extra;
