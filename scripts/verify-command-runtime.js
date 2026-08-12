@@ -31,6 +31,8 @@ const repere = fs.readFileSync(files.repere, 'utf8');
 
 const notifyAppendFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*&&\s*type\s*!==\s*['"]append['"]\s*\)\s*return\s*;/;
 const appendOwnGuard = /if\s*\(\s*type\s*===\s*['"]append['"]\s*&&\s*!msg\.key\.fromMe\s*\)\s*continue\s*;/;
+const relayCall = /sock\.relayMessage\s*\(/;
+const sendCall = /sock\.sendMessage\s*\(/;
 
 function sliceRegion(source, startNeedle, endNeedle, label) {
   const start = source.indexOf(startNeedle);
@@ -65,8 +67,6 @@ for (const marker of [
   if (!handler.includes(marker)) throw new Error(`[verify-runtime] suivi réponse absent: ${marker}`);
 }
 
-// Une réaction ou suppression seule ne doit toujours pas être prise pour une
-// réponse visible de commande.
 if (!handler.includes('!disciplinedPayload.react') || !handler.includes('!disciplinedPayload.delete')) {
   throw new Error('[verify-runtime] exclusion react/delete du watchdog absente');
 }
@@ -74,9 +74,7 @@ if (!handler.includes('!message.protocolMessage') || !handler.includes('!message
   throw new Error('[verify-runtime] exclusion relay protocol/reaction absente');
 }
 
-// 2. Les sessions appairées doivent avoir la même politique upsert que le
-// socket principal : notify + append uniquement pour fromMe. On vérifie la
-// structure, pas la mise en forme exacte produite par les patches précédents.
+// 2. Multi-session : notify + append uniquement pour fromMe.
 const sessionMessages = sliceRegion(
   session,
   '// ─── MESSAGES (handler principal)',
@@ -100,8 +98,7 @@ if (!appendOwnGuard.test(index)) {
   throw new Error('[verify-runtime] protection append non-fromMe absente du socket principal');
 }
 
-// 3. checkAccess reste la source de vérité. Le vieux deuxième filtre public
-// qui bloquait silencieusement les utilisateurs normaux doit avoir disparu.
+// 3. Permissions : checkAccess reste la source de vérité.
 for (const marker of [
   '[PUBLIC COMMAND ACCESS FIX]',
   "else if (config.selfMode)",
@@ -118,14 +115,11 @@ if (handler.includes('if (!config.public && access.reason === null)')) {
   throw new Error('[verify-runtime] ancien filtre semi-public silencieux encore présent');
 }
 
-// 4. MENU / ALLMENU — routage + livraison visible.
-// Le menu interactif peut utiliser relayMessage après les patches visuels ; le
-// watchdog doit donc le suivre. `allmenu`, lui, doit garder une branche dédiée
-// qui envoie effectivement chaque chunk avec sendMessage.
+// 4. MENU / ALLMENU — on valide la logique, jamais une mise en forme précise.
 if (!menu.includes('sendStyledMenuMessage')) {
   throw new Error('[verify-runtime] expéditeur menu unifié absent');
 }
-if (!menu.includes('sock.relayMessage')) {
+if (!relayCall.test(menu)) {
   throw new Error('[verify-runtime] relayMessage menu attendu mais absent');
 }
 
@@ -133,16 +127,26 @@ const menuAliases = getAliases(menu, 'menu');
 if (!/['"]menu['"]/.test(menuAliases) || !/['"]allmenu['"]/.test(menuAliases)) {
   throw new Error('[verify-runtime] menu/allmenu ne routent pas vers le même module');
 }
-if (!/if\s*\(\s*body\s*===\s*['"]allmenu['"]\s*\)/.test(menu)) {
-  throw new Error('[verify-runtime] branche execute allmenu absente');
+
+const allmenuStart = menu.search(/if\s*\(\s*body\s*===\s*['"]allmenu['"]\s*\)\s*\{/);
+const styleMatchPos = allmenuStart < 0 ? -1 : menu.indexOf('const styleMatch = body.match(', allmenuStart);
+if (allmenuStart < 0 || styleMatchPos < 0 || styleMatchPos <= allmenuStart) {
+  throw new Error('[verify-runtime] branche execute allmenu absente ou non délimitée');
 }
-if (!menu.includes('buildAllMenuChunks') || !menu.includes('await sock.sendMessage(')) {
+const allmenuBlock = menu.slice(allmenuStart, styleMatchPos);
+if (!allmenuBlock.includes('buildAllMenuChunks')) {
+  throw new Error('[verify-runtime] génération allmenu absente');
+}
+if (!sendCall.test(allmenuBlock)) {
   throw new Error('[verify-runtime] livraison visible allmenu absente');
+}
+if (relayCall.test(allmenuBlock) || allmenuBlock.includes('sendStyledMenuMessage(')) {
+  throw new Error('[verify-runtime] allmenu dépend encore de la livraison interactive');
 }
 
 // 5. REPERE / REPÈRE — même commande, même sécurité, double chemin de
-// livraison. L'accent doit être déclaré explicitement car commandLoader met en
-// minuscules mais ne supprime pas les accents.
+// livraison. Le vérificateur accepte le relay brut de la source privée ET le
+// relay enveloppé par withInteractiveTimeout dans le build Render.
 if (!/name\s*:\s*['"]repere['"]/.test(repere)) {
   throw new Error('[verify-runtime] commande repere canonique absente');
 }
@@ -156,13 +160,17 @@ for (const alias of ['rep', 'repère']) {
 if (!/ownerOnly\s*:\s*true/.test(repere)) {
   throw new Error('[verify-runtime] protection ownerOnly de repere absente');
 }
-for (const marker of [
-  'sendInteractiveRepere',
-  'await sock.relayMessage(',
-  'fallbackText',
-  'await sock.sendMessage(',
-]) {
-  if (!repere.includes(marker)) throw new Error(`[verify-runtime] livraison repere incomplète: ${marker}`);
+if (!repere.includes('sendInteractiveRepere')) {
+  throw new Error('[verify-runtime] fonction interactive repere absente');
+}
+if (!relayCall.test(repere)) {
+  throw new Error('[verify-runtime] relayMessage repere absent');
+}
+if (!repere.includes('fallbackText')) {
+  throw new Error('[verify-runtime] fallback texte repere absent');
+}
+if (!sendCall.test(repere)) {
+  throw new Error('[verify-runtime] sendMessage fallback repere absent');
 }
 
-console.log('[verify-runtime] ✅ menu/allmenu + repere/repère, send/relay/pending, append(fromMe) et permissions validés');
+console.log('[verify-runtime] ✅ menu/allmenu + repere/repère, send/relay/pending, append(fromMe) et permissions validés structurellement');
