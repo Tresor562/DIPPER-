@@ -28,13 +28,17 @@ const index = fs.readFileSync(files.index, 'utf8');
 const menu = fs.readFileSync(files.menu, 'utf8');
 
 // 1. Le watchdog doit reconnaître les deux primitives de réponse réellement
-// utilisées par les commandes : sendMessage et relayMessage.
+// utilisées par les commandes : sendMessage et relayMessage, y compris les
+// anciennes commandes qui ne font pas await sur leur envoi.
 for (const marker of [
   '[RESPONSE STYLE DISCIPLINE]',
   '[RELAY RESPONSE WATCH]',
+  '[PENDING RESPONSE WATCH]',
   '[COMMAND RESPONSE WATCHDOG]',
   'responseTrace.responses += 1',
   'relayTrace.responses += 1',
+  'commandResponseTrace.pending > 0',
+  'Date.now() + 4000',
 ]) {
   if (!handler.includes(marker)) throw new Error(`[verify-runtime] suivi réponse absent: ${marker}`);
 }
@@ -99,4 +103,4 @@ if (!/['"]menu['"]/.test(aliasBody) || !/['"]allmenu['"]/.test(aliasBody)) {
   throw new Error('[verify-runtime] menu/allmenu ne routent pas vers le même module');
 }
 
-console.log('[verify-runtime] ✅ menu/allmenu, relay watchdog, groupes append et permissions validés');
+console.log('[verify-runtime] ✅ menu/allmenu, pending/relay watchdog, groupes append et permissions validés');
