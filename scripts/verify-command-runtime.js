@@ -82,15 +82,20 @@ for (const marker of [
 }
 if (handler.includes('if (!config.public && access.reason === null)')) throw new Error('[verify-runtime] ancien filtre semi-public silencieux encore présent');
 
-// 4. MENU / ALLMENU — native-flow direct, pas de wrapper viewOnce.
+// 4. MENU / ALLMENU — un seul rendu, effet newsletter Nexus Tech, deux CTA.
 for (const marker of [
   'sendStyledMenuMessage', '[DIRECT NATIVE FLOW DELIVERY]', '[INTERACTIVE DELIVERY TIMEOUT]',
-  '[ALLMENU SINGLE RICH DELIVERY]', 'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'getImageBufferForStyle',
-  'additionalNodes: buildRelayNodes()', 'waitForAck(',
+  '[ALLMENU SINGLE RICH DELIVERY]', '[DUAL CHANNEL CTA]', '[SINGLE COMMAND DELIVERY]',
+  'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'getImageBufferForStyle',
+  'additionalNodes: buildRelayNodes()', "newsletterMetadata('jid', newsletterJid)",
+  "display_text: '📢 Voir Nexus Tech'", "display_text: '🖤 Voir Otaku Nexus'",
 ]) {
   if (!menu.includes(marker)) throw new Error(`[verify-runtime] menu enrichi incomplet: ${marker}`);
 }
 if (!relayCall.test(menu)) throw new Error('[verify-runtime] relayMessage menu attendu mais absent');
+if (menu.includes('waitForAck(') || menu.includes('sans ACK WhatsApp')) {
+  throw new Error('[verify-runtime] ancien mécanisme ACK pouvant provoquer une double réponse menu/allmenu');
+}
 
 const menuSender = sliceRegion(
   menu,
@@ -100,6 +105,12 @@ const menuSender = sliceRegion(
 );
 if (menuSender.includes('viewOnceMessage: {')) {
   throw new Error('[verify-runtime] menu utilise encore le wrapper viewOnceMessage');
+}
+if ((menuSender.match(/display_text:\s*['"]📢 Voir Nexus Tech['"]/g) || []).length !== 1) {
+  throw new Error('[verify-runtime] bouton Nexus Tech menu doit exister exactement une fois');
+}
+if ((menuSender.match(/display_text:\s*['"]🖤 Voir Otaku Nexus['"]/g) || []).length !== 1) {
+  throw new Error('[verify-runtime] bouton Otaku Nexus menu doit exister exactement une fois');
 }
 
 const menuAliases = getAliases(menu, 'menu');
@@ -123,7 +134,7 @@ if (/for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*chunks\.length/.test(allmenuBlock)
   throw new Error('[verify-runtime] allmenu est encore séparé en plusieurs messages');
 }
 
-// 5. REPERE / REPÈRE — native-flow direct + triple fallback.
+// 5. REPERE / REPÈRE — un seul rendu interactif + deux CTA, fallback uniquement sur erreur réelle.
 if (!/name\s*:\s*['"]repere['"]/.test(repere)) throw new Error('[verify-runtime] commande repere canonique absente');
 const repereAliases = getAliases(repere, 'repere');
 for (const alias of ['rep', 'repère']) {
@@ -132,27 +143,41 @@ for (const alias of ['rep', 'repère']) {
 }
 if (!/ownerOnly\s*:\s*true/.test(repere)) throw new Error('[verify-runtime] protection ownerOnly de repere absente');
 for (const marker of [
-  'sendInteractiveRepere', '[DIRECT NATIVE FLOW DELIVERY]', 'forwardedNewsletterMessageInfo',
-  "name: 'cta_url'", 'additionalNodes,', 'waitForAck(', 'sendStandardNewsletterFallback',
-  'sendHardFallback', 'fallbackText',
+  'sendInteractiveRepere', '[DIRECT NATIVE FLOW DELIVERY]', '[DUAL CHANNEL CTA]', '[SINGLE COMMAND DELIVERY]',
+  'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'additionalNodes,',
+  "newsletterMetadata('jid', effectiveNewsletterJid)", "display_text: '📢 Voir Nexus Tech'",
+  "display_text: '🖤 Voir Otaku Nexus'", 'sendStandardNewsletterFallback', 'sendHardFallback', 'fallbackText',
 ]) {
   if (!repere.includes(marker)) throw new Error(`[verify-runtime] repere livraison incomplète: ${marker}`);
+}
+if (repere.includes('waitForAck(') || repere.includes('sans ACK WhatsApp')) {
+  throw new Error('[verify-runtime] ancien mécanisme ACK pouvant provoquer une double réponse repere');
 }
 if (!relayCall.test(repere) || !sendCall.test(repere)) throw new Error('[verify-runtime] repere doit conserver relay + send fallback');
 const repereSender = sliceRegion(repere, 'async function sendInteractiveRepere(', 'async function sendStandardNewsletterFallback(', 'sendInteractiveRepere');
 if (repereSender.includes('viewOnceMessage: {')) {
   throw new Error('[verify-runtime] repere utilise encore le wrapper viewOnceMessage');
 }
+if ((repereSender.match(/display_text:\s*['"]📢 Voir Nexus Tech['"]/g) || []).length !== 1) {
+  throw new Error('[verify-runtime] bouton Nexus Tech repere doit exister exactement une fois');
+}
+if ((repereSender.match(/display_text:\s*['"]🖤 Voir Otaku Nexus['"]/g) || []).length !== 1) {
+  throw new Error('[verify-runtime] bouton Otaku Nexus repere doit exister exactement une fois');
+}
 
-// 6. PING — identité de la session connectée + effet newsletter final.
+// 6. PING — identité connectée + effet newsletter Nexus Tech + une seule bulle visible.
 for (const marker of [
   'function getConnectedPhoneNumber(sock)', 'sock?._sessionPhoneNumber', 'sock?.user?.id',
   'forwardedNewsletterMessageInfo', 'newsletterJid:', 'contextInfo: getNewsletterContext()',
+  'measureLatencyWithoutMessage', '[PING SINGLE RESPONSE]', "sendPresenceUpdate('composing'",
 ]) {
   if (!ping.includes(marker)) throw new Error(`[verify-runtime] ping session/newsletter incomplet: ${marker}`);
+}
+if (ping.includes('const probe = await reply') || ping.includes('{ delete: probeKey }')) {
+  throw new Error('[verify-runtime] ping crée encore une deuxième bulle de sonde');
 }
 const cfgNumberPos = ping.indexOf('config.ownerNumber');
 const connectedFnPos = ping.indexOf('function getConnectedPhoneNumber(sock)');
 if (cfgNumberPos < connectedFnPos) throw new Error('[verify-runtime] ping utilise config.ownerNumber avant identité socket');
 
-console.log('[verify-runtime] ✅ menu/M + allmenu unifié + repere native-flow direct + ping session/newsletter + sessions/permissions validés');
+console.log('[verify-runtime] ✅ menu/allmenu/repere: une réponse + 2 CTA; ping: une réponse + newsletter; sessions/permissions validés');
