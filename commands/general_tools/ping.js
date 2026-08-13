@@ -4,6 +4,7 @@
  * l'uptime et la mémoire, avec effet newsletter de la chaîne.
  */
 const config = require('../../config');
+const styleManager = require('../../utils/styleManager');
 const { getConnectedOwnerName } = require('../../utils/ownerIdentity');
 
 const SC = (t) => {
@@ -112,6 +113,22 @@ module.exports = {
         `╰━━━━━━━━━━━━━━━╯\n\n` +
         phrases.footer();
 
+      // [PING DUAL CHANNEL CTA] Le runtime déployé exporte exactement le même
+      // moteur interactif que Menu/Allmenu/Welcome/Goodbye. Ping l'utilise
+      // directement afin de conserver une seule bulle et les deux CTA.
+      const menu = require('./menu');
+      if (typeof menu.sendStyledMenuMessage === 'function') {
+        return await menu.sendStyledMenuMessage(sock, from, {
+          text,
+          style: styleManager.getStyle(),
+          quoted: from?.endsWith('@g.us') ? msg : null,
+          mentions: [],
+          withImage: false,
+        });
+      }
+
+      // Repli de compatibilité si le fichier est exécuté hors du wrapper de
+      // déploiement : toujours une seule réponse, avec le même effet newsletter.
       const sendOptions = from?.endsWith('@g.us') ? { quoted: msg } : undefined;
       return await sock.sendMessage(from, {
         text,
