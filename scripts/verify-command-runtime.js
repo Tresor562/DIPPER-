@@ -82,13 +82,25 @@ for (const marker of [
 }
 if (handler.includes('if (!config.public && access.reason === null)')) throw new Error('[verify-runtime] ancien filtre semi-public silencieux encore présent');
 
-// 4. MENU / ALLMENU — le premier chunk doit être enrichi, les suivants standard.
+// 4. MENU / ALLMENU — native-flow direct, pas de wrapper viewOnce.
 for (const marker of [
-  'sendStyledMenuMessage', 'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'getImageBufferForStyle',
+  'sendStyledMenuMessage', '[DIRECT NATIVE FLOW DELIVERY]', '[INTERACTIVE DELIVERY TIMEOUT]',
+  'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'getImageBufferForStyle',
+  'additionalNodes: buildRelayNodes()', 'waitForAck(',
 ]) {
   if (!menu.includes(marker)) throw new Error(`[verify-runtime] menu enrichi incomplet: ${marker}`);
 }
 if (!relayCall.test(menu)) throw new Error('[verify-runtime] relayMessage menu attendu mais absent');
+
+const menuSender = sliceRegion(
+  menu,
+  'async function sendStyledMenuMessage(',
+  '// ══════════════════════════════════════════════════════════════\n// 📋 NAVIGATION PAR CATÉGORIES',
+  'sendStyledMenuMessage'
+);
+if (menuSender.includes('viewOnceMessage: {')) {
+  throw new Error('[verify-runtime] menu utilise encore le wrapper viewOnceMessage');
+}
 
 const menuAliases = getAliases(menu, 'menu');
 if (!/['"]menu['"]/.test(menuAliases) || !/['"]allmenu['"]/.test(menuAliases)) {
@@ -101,11 +113,17 @@ if (allmenuStart < 0 || styleMatchPos < 0 || styleMatchPos <= allmenuStart) {
   throw new Error('[verify-runtime] branche execute allmenu absente ou non délimitée');
 }
 const allmenuBlock = menu.slice(allmenuStart, styleMatchPos);
-for (const marker of ['buildAllMenuChunks', 'sendStyledMenuMessage(', 'withImage: true', 'await sock.sendMessage(']) {
-  if (!allmenuBlock.includes(marker)) throw new Error(`[verify-runtime] allmenu hybride incomplet: ${marker}`);
+for (const marker of [
+  '[ALLMENU SINGLE RICH DELIVERY]', 'buildAllMenuChunks', "fullMenuText = chunks.join('\\n\\n')",
+  'sendStyledMenuMessage(', 'text: fullMenuText', 'withImage: true',
+]) {
+  if (!allmenuBlock.includes(marker)) throw new Error(`[verify-runtime] allmenu unifié incomplet: ${marker}`);
+}
+if (/for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*chunks\.length/.test(allmenuBlock)) {
+  throw new Error('[verify-runtime] allmenu est encore séparé en plusieurs messages');
 }
 
-// 5. REPERE / REPÈRE — interactif + newsletter + fallback vraiment indépendant.
+// 5. REPERE / REPÈRE — native-flow direct + triple fallback.
 if (!/name\s*:\s*['"]repere['"]/.test(repere)) throw new Error('[verify-runtime] commande repere canonique absente');
 const repereAliases = getAliases(repere, 'repere');
 for (const alias of ['rep', 'repère']) {
@@ -114,12 +132,17 @@ for (const alias of ['rep', 'repère']) {
 }
 if (!/ownerOnly\s*:\s*true/.test(repere)) throw new Error('[verify-runtime] protection ownerOnly de repere absente');
 for (const marker of [
-  'sendInteractiveRepere', 'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'sendStandardNewsletterFallback',
+  'sendInteractiveRepere', '[DIRECT NATIVE FLOW DELIVERY]', 'forwardedNewsletterMessageInfo',
+  "name: 'cta_url'", 'additionalNodes,', 'waitForAck(', 'sendStandardNewsletterFallback',
   'sendHardFallback', 'fallbackText',
 ]) {
   if (!repere.includes(marker)) throw new Error(`[verify-runtime] repere livraison incomplète: ${marker}`);
 }
 if (!relayCall.test(repere) || !sendCall.test(repere)) throw new Error('[verify-runtime] repere doit conserver relay + send fallback');
+const repereSender = sliceRegion(repere, 'async function sendInteractiveRepere(', 'async function sendStandardNewsletterFallback(', 'sendInteractiveRepere');
+if (repereSender.includes('viewOnceMessage: {')) {
+  throw new Error('[verify-runtime] repere utilise encore le wrapper viewOnceMessage');
+}
 
 // 6. PING — identité de la session connectée + effet newsletter final.
 for (const marker of [
@@ -132,4 +155,4 @@ const cfgNumberPos = ping.indexOf('config.ownerNumber');
 const connectedFnPos = ping.indexOf('function getConnectedPhoneNumber(sock)');
 if (cfgNumberPos < connectedFnPos) throw new Error('[verify-runtime] ping utilise config.ownerNumber avant identité socket');
 
-console.log('[verify-runtime] ✅ menu/M enrichi + allmenu hybride + repere triple fallback + ping session/newsletter + sessions/permissions validés');
+console.log('[verify-runtime] ✅ menu/M + allmenu unifié + repere native-flow direct + ping session/newsletter + sessions/permissions validés');
