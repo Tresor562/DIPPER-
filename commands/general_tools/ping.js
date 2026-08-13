@@ -20,7 +20,6 @@ function normalizePhone(value) {
 }
 
 function getConnectedPhoneNumber(sock) {
-  // Sous-session appairée : sessionManager renseigne explicitement ce champ.
   const candidates = [
     sock?._sessionPhoneNumber,
     sock?.user?.id,
@@ -32,7 +31,6 @@ function getConnectedPhoneNumber(sock) {
     if (number) return number;
   }
 
-  // Fallback uniquement si WhatsApp n'a encore exposé aucune identité socket.
   const configured = Array.isArray(config.ownerNumber) ? config.ownerNumber[0] : config.ownerNumber;
   return normalizePhone(configured) || 'N/A';
 }
@@ -49,6 +47,25 @@ function getNewsletterContext() {
   };
 }
 
+async function measureLatencyWithoutMessage(sock, from) {
+  // [PING SINGLE RESPONSE] Mesure réseau sans créer de deuxième bulle WhatsApp.
+  const start = Date.now();
+  if (typeof sock?.sendPresenceUpdate !== 'function') return 1;
+
+  try {
+    await Promise.race([
+      sock.sendPresenceUpdate('composing', from),
+      new Promise(resolve => {
+        const timer = setTimeout(resolve, 1500);
+        if (timer.unref) timer.unref();
+      }),
+    ]);
+  } catch (_) {}
+
+  Promise.resolve(sock.sendPresenceUpdate('paused', from)).catch(() => {});
+  return Math.max(1, Date.now() - start);
+}
+
 module.exports = {
   name   : 'ping',
   aliases: ['vitesse', 'p', 'flux', 'latence', 'uping', 'pingpremium'],
@@ -60,9 +77,7 @@ module.exports = {
     const { reply, from, phrases } = extra;
 
     try {
-      const start = Date.now();
-      const probe = await reply(`*☬ ${SC("l'ombre s'éveille")}...*`);
-      const latency = Date.now() - start;
+      const latency = await measureLatencyWithoutMessage(sock, from);
 
       const uptime = process.uptime();
       const h = Math.floor(uptime / 3600);
@@ -98,19 +113,10 @@ module.exports = {
         phrases.footer();
 
       const sendOptions = from?.endsWith('@g.us') ? { quoted: msg } : undefined;
-      const finalMessage = await sock.sendMessage(from, {
+      return await sock.sendMessage(from, {
         text,
         contextInfo: getNewsletterContext(),
       }, sendOptions);
-
-      // Le message de mesure n'est qu'une sonde. On le retire si WhatsApp
-      // autorise la suppression afin de garder un seul rendu Ping final.
-      const probeKey = probe?.key || probe;
-      if (probeKey && typeof probeKey === 'object' && probeKey.id) {
-        try { await sock.sendMessage(from, { delete: probeKey }); } catch (_) {}
-      }
-
-      return finalMessage;
     } catch (err) {
       await reply(`*❌ ${SC('erreur flux')} :* ${err.message}`);
     }
