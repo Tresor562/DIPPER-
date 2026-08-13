@@ -85,7 +85,7 @@ if (handler.includes('if (!config.public && access.reason === null)')) throw new
 // 4. MENU / ALLMENU — native-flow direct, pas de wrapper viewOnce.
 for (const marker of [
   'sendStyledMenuMessage', '[DIRECT NATIVE FLOW DELIVERY]', '[INTERACTIVE DELIVERY TIMEOUT]',
-  'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'getImageBufferForStyle',
+  '[ALLMENU SINGLE RICH DELIVERY]', 'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'getImageBufferForStyle',
   'additionalNodes: buildRelayNodes()', 'waitForAck(',
 ]) {
   if (!menu.includes(marker)) throw new Error(`[verify-runtime] menu enrichi incomplet: ${marker}`);
@@ -114,7 +114,7 @@ if (allmenuStart < 0 || styleMatchPos < 0 || styleMatchPos <= allmenuStart) {
 }
 const allmenuBlock = menu.slice(allmenuStart, styleMatchPos);
 for (const marker of [
-  '[ALLMENU SINGLE RICH DELIVERY]', 'buildAllMenuChunks', "fullMenuText = chunks.join('\\n\\n')",
+  'buildAllMenuChunks', "fullMenuText = chunks.join('\\n\\n')",
   'sendStyledMenuMessage(', 'text: fullMenuText', 'withImage: true',
 ]) {
   if (!allmenuBlock.includes(marker)) throw new Error(`[verify-runtime] allmenu unifié incomplet: ${marker}`);
