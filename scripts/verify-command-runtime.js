@@ -15,11 +15,16 @@ const files = {
   responseInstaller: path.join(ROOT, 'scripts', 'install-response-style.js'),
   runtimeInstaller: path.join(ROOT, 'scripts', 'install-command-runtime-fixes.js'),
 };
+const welcomePath = path.join(ROOT, 'utils', 'welcomeCard.js');
 
 for (const [name, file] of Object.entries(files)) {
   if (!fs.existsSync(file)) throw new Error(`[verify-runtime] ${name} absent: ${file}`);
   const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
   if (check.status !== 0) throw new Error(`[verify-runtime] syntaxe invalide ${name}: ${check.stderr || check.stdout}`);
+}
+if (fs.existsSync(welcomePath)) {
+  const check = spawnSync(process.execPath, ['--check', welcomePath], { encoding: 'utf8' });
+  if (check.status !== 0) throw new Error(`[verify-runtime] syntaxe invalide welcomeCard: ${check.stderr || check.stdout}`);
 }
 
 const handler = fs.readFileSync(files.handler, 'utf8');
@@ -28,6 +33,7 @@ const index = fs.readFileSync(files.index, 'utf8');
 const menu = fs.readFileSync(files.menu, 'utf8');
 const ping = fs.readFileSync(files.ping, 'utf8');
 const repere = fs.readFileSync(files.repere, 'utf8');
+const welcome = fs.existsSync(welcomePath) ? fs.readFileSync(welcomePath, 'utf8') : '';
 
 const notifyAppendFilter = /if\s*\(\s*type\s*!==\s*['"]notify['"]\s*&&\s*type\s*!==\s*['"]append['"]\s*\)\s*return\s*;/;
 const appendOwnGuard = /if\s*\(\s*type\s*===\s*['"]append['"]\s*&&\s*!msg\.key\.fromMe\s*\)\s*continue\s*;/;
@@ -134,7 +140,7 @@ if (/for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*chunks\.length/.test(allmenuBlock)
   throw new Error('[verify-runtime] allmenu est encore séparé en plusieurs messages');
 }
 
-// 5. REPERE / REPÈRE — un seul rendu interactif + deux CTA, fallback uniquement sur erreur réelle.
+// 5. REPERE / REPÈRE — un seul rendu interactif + deux CTA, sans URL brute.
 if (!/name\s*:\s*['"]repere['"]/.test(repere)) throw new Error('[verify-runtime] commande repere canonique absente');
 const repereAliases = getAliases(repere, 'repere');
 for (const alias of ['rep', 'repère']) {
@@ -146,7 +152,8 @@ for (const marker of [
   'sendInteractiveRepere', '[DIRECT NATIVE FLOW DELIVERY]', '[DUAL CHANNEL CTA]', '[SINGLE COMMAND DELIVERY]',
   'forwardedNewsletterMessageInfo', "name: 'cta_url'", 'additionalNodes,',
   "newsletterMetadata('jid', effectiveNewsletterJid)", "display_text: '📢 Voir Nexus Tech'",
-  "display_text: '🖤 Voir Otaku Nexus'", 'sendStandardNewsletterFallback', 'sendHardFallback', 'fallbackText',
+  "display_text: '🖤 Voir Otaku Nexus'", 'sendStandardNewsletterFallback', 'sendHardFallback',
+  'const fallbackText = caption;',
 ]) {
   if (!repere.includes(marker)) throw new Error(`[verify-runtime] repere livraison incomplète: ${marker}`);
 }
@@ -164,20 +171,52 @@ if ((repereSender.match(/display_text:\s*['"]📢 Voir Nexus Tech['"]/g) || []).
 if ((repereSender.match(/display_text:\s*['"]🖤 Voir Otaku Nexus['"]/g) || []).length !== 1) {
   throw new Error('[verify-runtime] bouton Otaku Nexus repere doit exister exactement une fois');
 }
+const repereExecute = repere.slice(repere.indexOf('async execute('));
+if (/fallbackText\s*=\s*[^;]*(?:channelUrl|whatsapp\.com\/channel)/s.test(repereExecute)) {
+  throw new Error('[verify-runtime] repere réintroduit une URL brute dans son message');
+}
+const repereNewsletterFallback = sliceRegion(
+  repere,
+  'async function sendStandardNewsletterFallback(',
+  'async function sendHardFallback(',
+  'fallback newsletter repere'
+);
+if (/await\s+sock\.sendMessage\s*\(/.test(repereNewsletterFallback)) {
+  throw new Error('[verify-runtime] fallback newsletter repere peut encore envoyer deux bulles séquentielles');
+}
 
-// 6. PING — identité connectée + effet newsletter Nexus Tech + une seule bulle visible.
+// 6. PING — une seule réponse, même moteur interactif et mêmes deux CTA.
 for (const marker of [
   'function getConnectedPhoneNumber(sock)', 'sock?._sessionPhoneNumber', 'sock?.user?.id',
-  'forwardedNewsletterMessageInfo', 'newsletterJid:', 'contextInfo: getNewsletterContext()',
-  'measureLatencyWithoutMessage', '[PING SINGLE RESPONSE]', "sendPresenceUpdate('composing'",
+  'forwardedNewsletterMessageInfo', 'newsletterJid:', 'measureLatencyWithoutMessage',
+  '[PING SINGLE RESPONSE]', '[PING DUAL CHANNEL CTA]', "sendPresenceUpdate('composing'",
+  'menu.sendStyledMenuMessage', 'style: styleManager.getStyle()', 'withImage: false',
 ]) {
-  if (!ping.includes(marker)) throw new Error(`[verify-runtime] ping session/newsletter incomplet: ${marker}`);
+  if (!ping.includes(marker)) throw new Error(`[verify-runtime] ping session/CTA incomplet: ${marker}`);
 }
 if (ping.includes('const probe = await reply') || ping.includes('{ delete: probeKey }')) {
   throw new Error('[verify-runtime] ping crée encore une deuxième bulle de sonde');
+}
+if (/whatsapp\.com\/channel\//i.test(ping)) {
+  throw new Error('[verify-runtime] ping contient une URL de chaîne brute');
 }
 const cfgNumberPos = ping.indexOf('config.ownerNumber');
 const connectedFnPos = ping.indexOf('function getConnectedPhoneNumber(sock)');
 if (cfgNumberPos < connectedFnPos) throw new Error('[verify-runtime] ping utilise config.ownerNumber avant identité socket');
 
-console.log('[verify-runtime] ✅ menu/allmenu/repere: une réponse + 2 CTA; ping: une réponse + newsletter; sessions/permissions validés');
+// 7. WELCOME / GOODBYE — même moteur à deux CTA; fallback unique et sans URL.
+// Ce fichier est injecté par le wrapper public. Le contrôle reste optionnel
+// dans le dépôt privé seul, mais devient obligatoire dès qu'il existe au build.
+if (welcome) {
+  for (const marker of [
+    'sendGroupEventCard', 'menu.sendStyledMenuMessage', 'imageBuffer: buffer',
+    'withImage: true', 'caption: text', 'forwardedNewsletterMessageInfo',
+  ]) {
+    if (!welcome.includes(marker)) throw new Error(`[verify-runtime] welcome/goodbye incomplet: ${marker}`);
+  }
+  if (/whatsapp\.com\/channel\//i.test(welcome) || welcome.includes('const channelUrl =')) {
+    throw new Error('[verify-runtime] welcome/goodbye contient encore un lien brut de chaîne');
+  }
+}
+
+console.log('[verify-runtime] ✅ menu/allmenu/repere/ping/welcome/goodbye: réponse unique; CTA et liens bruts protégés');
