@@ -28,7 +28,7 @@ module.exports = {
   usage: `${config.prefix || '.'}goodbye <on/off>`, 
   groupOnly: true,
   adminOnly: false, // Traitement manuel ci-dessous pour inclure les Maîtres
-  botAdminNeeded: true,
+  botAdminNeeded: false,
 
   async execute(sock, msg, args, extra) {
     const { reply, isOwner, isAdmin } = extra;
