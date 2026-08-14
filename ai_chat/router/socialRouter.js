@@ -15,15 +15,25 @@ function getText(message = {}) {
   return m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || '';
 }
 
-function routeMessage({ msg, botJid, recentExauceeMessageIds = new Set(), humanTakeover = false }) {
+function normalizeJid(jid = '') {
+  return String(jid).replace(/:\d+(?=@)/, '');
+}
+
+function routeMessage({ msg, botJid, botJids = [], recentExauceeMessageIds = new Set(), humanTakeover = false }) {
   const chatId = msg?.key?.remoteJid || '';
   const isGroup = chatId.endsWith('@g.us');
   const text = getText(msg?.message || {});
-  const quotedId = unwrapMessage(msg?.message || {})?.extendedTextMessage?.contextInfo?.stanzaId || null;
-  const mentions = unwrapMessage(msg?.message || {})?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  const unwrapped = unwrapMessage(msg?.message || {});
+  const contextInfo = unwrapped?.extendedTextMessage?.contextInfo ||
+    unwrapped?.imageMessage?.contextInfo ||
+    unwrapped?.videoMessage?.contextInfo ||
+    unwrapped?.documentMessage?.contextInfo || {};
+  const quotedId = contextInfo?.stanzaId || null;
+  const mentions = contextInfo?.mentionedJid || [];
   const replyToExaucee = quotedId ? recentExauceeMessageIds.has(quotedId) : false;
   const explicitName = NAME_RE.test(text);
-  const explicitMention = botJid ? mentions.includes(botJid) : false;
+  const knownBotJids = new Set([botJid, ...botJids].filter(Boolean).flatMap(j => [String(j), normalizeJid(j)]));
+  const explicitMention = mentions.some(j => knownBotJids.has(String(j)) || knownBotJids.has(normalizeJid(j)));
 
   if (msg?.key?.fromMe && !replyToExaucee) return { shouldRespond: false, reason: 'human-connected-account' };
   if (!isGroup && humanTakeover && !explicitName && !replyToExaucee) return { shouldRespond: false, reason: 'human-takeover' };
@@ -33,4 +43,4 @@ function routeMessage({ msg, botJid, recentExauceeMessageIds = new Set(), humanT
   return { shouldRespond: false, reason: 'group-human-conversation' };
 }
 
-module.exports = { getText, routeMessage };
+module.exports = { getText, routeMessage, normalizeJid };
