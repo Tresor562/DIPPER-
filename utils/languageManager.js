@@ -13,6 +13,11 @@ const SUPPORTED = new Set(['fr', 'en']);
 const cache = new Map();
 const translationCache = new Map();
 const MAX_TRANSLATION_CACHE = 1200;
+const MAX_TRANSLATION_CHUNK = 2800;
+
+const SMALL_CAPS = Object.freeze({
+  'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ғ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','ꜱ':'s','ѕ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
+});
 
 function normalizeSessionId(value) {
   const raw = String(value || 'default').trim() || 'default';
@@ -58,12 +63,21 @@ function setLanguage(sessionId, language) {
   return lang;
 }
 
+function normalizeDecorativeLatin(input) {
+  const normalized = String(input || '').normalize('NFKC');
+  return Array.from(normalized, ch => SMALL_CAPS[ch] || ch).join('');
+}
+
 function protectText(input) {
   const tokens = [];
   let text = String(input || '');
   const patterns = [
+    /```[\s\S]*?```/g,
     /https?:\/\/[^\s)>\]}]+/gi,
     /`[^`\n]+`/g,
+    />\s*Powered by 🌹 Mr Tresor 🌹/gi,
+    /THE BIG DIPPER/gi,
+    /🌹 Mr Tresor 🌹/gi,
     /@[0-9A-Za-z_.:+-]+/g,
     /(?:^|\s)[.!/#][a-zA-Z0-9_+-]+/g,
   ];
@@ -82,18 +96,41 @@ function protectText(input) {
 function restoreText(text, tokens) {
   let out = String(text || '');
   tokens.forEach((value, index) => {
-    out = out.replaceAll(`ZXQDIPPER${index}QXZ`, value);
-    out = out.replaceAll(`ZXQ DIPPER ${index} QXZ`, value);
+    const compact = `ZXQDIPPER${index}QXZ`;
+    const spaced = `ZXQ DIPPER ${index} QXZ`;
+    out = out.replaceAll(compact, value).replaceAll(spaced, value);
   });
   return out;
 }
 
 function shouldTranslate(text) {
-  const value = String(text || '').trim();
+  const value = normalizeDecorativeLatin(String(text || '')).trim();
   if (!value) return false;
   if (/^https?:\/\/\S+$/.test(value)) return false;
   if (/^[\d\s+._:/@#*`>|=\-]+$/.test(value)) return false;
   return /[A-Za-zÀ-ÿ]/.test(value);
+}
+
+function splitForTranslation(text, max = MAX_TRANSLATION_CHUNK) {
+  const source = String(text || '');
+  if (source.length <= max) return [source];
+  const chunks = [];
+  let current = '';
+  for (const line of source.split(/(?<=\n)/)) {
+    if (line.length > max) {
+      if (current) { chunks.push(current); current = ''; }
+      for (let i = 0; i < line.length; i += max) chunks.push(line.slice(i, i + max));
+      continue;
+    }
+    if (current.length + line.length > max && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current += line;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 let translateFnPromise = null;
@@ -116,10 +153,17 @@ const FALLBACK_REPLACEMENTS = [
   [/Le bot est actuellement en mode silencieux/gi, 'The bot is currently muted'],
   [/Le bot est actuellement en mode privé/gi, 'The bot is currently in private mode'],
   [/Cette commande/gi, 'This command'],
+  [/Informations système/gi, 'System information'],
+  [/Infos système/gi, 'System info'],
+  [/Téléchargements/gi, 'Downloads'],
+  [/Outils généraux/gi, 'General tools'],
+  [/Gestion de groupe/gi, 'Group management'],
+  [/Langue actuelle/gi, 'Current language'],
   [/groupe/gi, 'group'],
   [/utilisateur/gi, 'user'],
   [/propriétaire/gi, 'owner'],
   [/administrateur/gi, 'administrator'],
+  [/commande/gi, 'command'],
   [/Erreur/gi, 'Error'],
   [/Échec/gi, 'Failure'],
   [/Succès/gi, 'Success'],
@@ -129,18 +173,14 @@ const FALLBACK_REPLACEMENTS = [
 ];
 
 function fallbackEnglish(text) {
-  let out = String(text || '');
+  let out = normalizeDecorativeLatin(String(text || ''));
   for (const [pattern, replacement] of FALLBACK_REPLACEMENTS) out = out.replace(pattern, replacement);
   return out;
 }
 
-async function translateText(text, target = 'en') {
-  const source = String(text ?? '');
-  if (target !== 'en' || !shouldTranslate(source)) return source;
-  const key = `en:${source}`;
-  if (translationCache.has(key)) return translationCache.get(key);
-
-  const { text: protectedText, tokens } = protectText(source);
+async function translateShortText(source) {
+  const normalized = normalizeDecorativeLatin(source);
+  const { text: protectedText, tokens } = protectText(normalized);
   let translated = null;
   const fn = await getTranslateFn();
   if (typeof fn === 'function') {
@@ -156,10 +196,21 @@ async function translateText(text, target = 'en') {
       }
     }
   }
-
   let out = translated ? restoreText(translated, tokens) : fallbackEnglish(source);
-  // Toujours préserver le footer officiel tel quel.
   out = out.replace(/>\s*Powered by 🌹 Mr Tresor 🌹/gi, '> Powered by 🌹 Mr Tresor 🌹');
+  return out;
+}
+
+async function translateText(text, target = 'en') {
+  const source = String(text ?? '');
+  if (target !== 'en' || !shouldTranslate(source)) return source;
+  const key = `en:${source}`;
+  if (translationCache.has(key)) return translationCache.get(key);
+
+  const parts = splitForTranslation(source);
+  const translatedParts = [];
+  for (const part of parts) translatedParts.push(await translateShortText(part));
+  const out = translatedParts.join('');
 
   translationCache.set(key, out);
   if (translationCache.size > MAX_TRANSLATION_CACHE) {
@@ -170,15 +221,16 @@ async function translateText(text, target = 'en') {
 }
 
 const TRANSLATABLE_KEYS = new Set([
-  'text', 'caption', 'title', 'subtitle', 'description', 'footerText',
-  'contentText', 'buttonText', 'selectedDisplayText', 'display_text',
+  'text', 'caption', 'title', 'subtitle', 'description', 'footer', 'footerText',
+  'contentText', 'buttonText', 'displayText', 'selectedDisplayText', 'display_text',
+  'body', 'header', 'label',
 ]);
 
 async function translateButtonParamsJson(value) {
   if (typeof value !== 'string' || !value.trim().startsWith('{')) return value;
   try {
     const obj = JSON.parse(value);
-    for (const key of ['display_text', 'title', 'description', 'text', 'buttonText']) {
+    for (const key of ['display_text', 'title', 'description', 'text', 'buttonText', 'displayText']) {
       if (typeof obj[key] === 'string') obj[key] = await translateText(obj[key], 'en');
     }
     return JSON.stringify(obj);
@@ -204,7 +256,7 @@ async function translateNode(node, seen = new WeakSet(), keyHint = '') {
   }
 
   for (const key of Object.keys(node)) {
-    if (key === 'vcard' || key === 'url' || key === 'sourceUrl' || key === 'mediaUrl' || key === 'newsletterName' || key === 'displayName') continue;
+    if (['vcard', 'url', 'sourceUrl', 'mediaUrl', 'newsletterName', 'displayName', 'id', 'jid'].includes(key)) continue;
     const value = node[key];
     if (typeof value === 'string' && (TRANSLATABLE_KEYS.has(key) || key === 'buttonParamsJson')) {
       node[key] = key === 'buttonParamsJson' ? await translateButtonParamsJson(value) : await translateText(value, 'en');
