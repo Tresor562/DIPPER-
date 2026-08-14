@@ -108,6 +108,107 @@ function ensureScheduler(exaucee, sock) {
   });
 }
 
+function cleanGameText(text) {
+  return String(text || '')
+    .replace(/^\s*(?:exauc[eé]e|exa)\s*[,!:;-]?\s*/i, '')
+    .replace(/^\s*(?:r[ée]ponse|answer)\s*[:=-]?\s*/i, '')
+    .trim();
+}
+
+function formatScore(gameMaster, chatId) {
+  const board = gameMaster.scoreboard(chatId) || [];
+  if (!board.length) return 'Aucun point pour le moment.';
+  return board.slice(0, 10).map(row => `${row.rank}. @${String(row.userId).split('@')[0]} — ${row.score} pt${row.score > 1 ? 's' : ''}`).join('\n');
+}
+
+async function sendExaucee(sock, exaucee, chatId, msg, text, mentions = []) {
+  const payload = { text: sanitizeModelText(text) };
+  if (mentions.length) payload.mentions = mentions;
+  const sent = await sock.sendMessage(chatId, payload, { quoted: msg });
+  exaucee.markOwnMessage(sent?.key?.id);
+  return sent;
+}
+
+async function handleGameMaster(exaucee, { sock, msg, chatId, userId, text }) {
+  const cleaned = cleanGameText(text);
+  const lower = cleaned.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const active = exaucee.gameMaster.get(chatId);
+
+  if (/\b(?:arrete|stop|termine|finis)\b.*\b(?:jeu|partie|quiz)\b/.test(lower)) {
+    const stopped = exaucee.gameMaster.stop(chatId);
+    if (!stopped) return false;
+    await sendExaucee(sock, exaucee, chatId, msg, `Partie arrêtée 🌸 On reprend quand tu veux.`);
+    return true;
+  }
+
+  if (/\b(?:score|scores|classement)\b/.test(lower) && active?.type === 'quiz') {
+    const board = exaucee.gameMaster.scoreboard(chatId) || [];
+    const mentions = board.map(x => x.userId).filter(Boolean);
+    await sendExaucee(sock, exaucee, chatId, msg, `🏆 *Classement du quiz*\n${formatScore(exaucee.gameMaster, chatId)}`, mentions);
+    return true;
+  }
+
+  if (/\b(?:lance|demarre|commence|start)\b.*\bquiz\b|^quiz(?:\s|$)/.test(lower)) {
+    const category = /\b(?:general|culture)\b/.test(lower) ? 'general' : 'anime';
+    const roundMatch = lower.match(/\b(\d{1,2})\s*(?:questions?|manches?|rounds?)\b/);
+    const rounds = roundMatch ? Number(roundMatch[1]) : 5;
+    const started = exaucee.gameMaster.startQuiz(chatId, { by: userId, category, rounds });
+    await sendExaucee(
+      sock,
+      exaucee,
+      chatId,
+      msg,
+      `🎮 *Quiz ${started.game.category === 'anime' ? 'Anime' : 'Culture générale'} — ${started.game.totalRounds} manches*\n\n*Question 1/${started.game.totalRounds}*\n${started.question}\n\nRéponds à ce message avec ta réponse 🌸`
+    );
+    exaucee.audit.write({ type: 'game_start', game: 'quiz', chatId, userId, gameId: started.game.id });
+    return true;
+  }
+
+  if (/\b(?:lance|demarre|commence|start)\b.*\b(?:action|verite|truth|dare)\b|^(?:action\s*(?:ou|\/)?\s*verite|truth\s*(?:or|\/)\s*dare)$/.test(lower)) {
+    const game = exaucee.gameMaster.startTruthOrDare(chatId, { by: userId });
+    await sendExaucee(sock, exaucee, chatId, msg, `🎭 *Action ou Vérité lancé !*\nÉcris *action* ou *vérité* en répondant à ce message. Je m’occupe des tours 🌸`);
+    exaucee.audit.write({ type: 'game_start', game: 'truth-or-dare', chatId, userId, gameId: game.id });
+    return true;
+  }
+
+  if (active?.type === 'truth-or-dare' && active.status === 'playing' && /^(?:action|dare|defi|verite|truth)$/.test(lower)) {
+    const turn = exaucee.gameMaster.nextTruthOrDare(chatId, userId, lower);
+    await sendExaucee(sock, exaucee, chatId, msg, `🎭 *${turn.type.toUpperCase()} — tour ${turn.turn}*\n${turn.prompt}`);
+    return true;
+  }
+
+  if (active?.type === 'quiz' && active.status === 'playing' && cleaned) {
+    const result = exaucee.gameMaster.answerQuiz(chatId, userId, cleaned);
+    if (!result.handled) return false;
+    if (!result.correct) {
+      await sendExaucee(sock, exaucee, chatId, msg, `Pas exactement 👀 Essaie encore 🌸`);
+      return true;
+    }
+    if (result.finished) {
+      const board = exaucee.gameMaster.scoreboard(chatId) || [];
+      await sendExaucee(
+        sock,
+        exaucee,
+        chatId,
+        msg,
+        `✅ Bonne réponse ! *${result.correctAnswer}*\n\n🏁 *Quiz terminé !*\n${formatScore(exaucee.gameMaster, chatId)}\n\nBien joué 🌸`,
+        board.map(x => x.userId).filter(Boolean)
+      );
+      return true;
+    }
+    await sendExaucee(
+      sock,
+      exaucee,
+      chatId,
+      msg,
+      `✅ Bonne réponse ! *${result.correctAnswer}*\n\n*Question ${result.round}/${result.totalRounds}*\n${result.nextQuestion}`
+    );
+    return true;
+  }
+
+  return false;
+}
+
 async function executeDynamic(exaucee, sessionId, text, chatId, sock, msg) {
   const first = String(text || '').trim().split(/\s+/)[0].replace(/^[.!/]/, '').toLowerCase();
   if (!first) return false;
@@ -146,6 +247,7 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   const userId = actorJid(msg);
   const ids = { sessionId, chatId, userId };
 
+  if (await handleGameMaster(exaucee, { sock, msg, chatId, userId, text: routed.text })) return true;
   if (await executeDynamic(exaucee, sessionId, routed.text, chatId, sock, msg)) return true;
 
   const memoryIntent = parseMemoryIntent(routed.text);
@@ -156,8 +258,7 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   const dynamic = parseDynamicReply(routed.text);
   if (dynamic && (actor.isOwner || actor.isSuperMe || actor.isAdmin)) {
     if (SENSITIVE_TEXT_RE.test(dynamic.response)) {
-      const sent = await sock.sendMessage(chatId, { text: `Je ne peux pas enregistrer une commande contenant un secret ou un identifiant sensible. 🌸` }, { quoted: msg });
-      exaucee.markOwnMessage(sent?.key?.id);
+      await sendExaucee(sock, exaucee, chatId, msg, `Je ne peux pas enregistrer une commande contenant un secret ou un identifiant sensible. 🌸`);
       return true;
     }
     exaucee.dynamicCommands.define(sessionId, {
@@ -165,16 +266,14 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
       groupId: chatId.endsWith('@g.us') ? chatId : null,
       workflow: { type: 'reply', text: dynamic.response }
     });
-    const sent = await sock.sendMessage(chatId, { text: `C'est fait 🌸 La commande ${dynamic.name} répondra désormais ici.` }, { quoted: msg });
-    exaucee.markOwnMessage(sent?.key?.id);
+    await sendExaucee(sock, exaucee, chatId, msg, `C'est fait 🌸 La commande ${dynamic.name} répondra désormais ici.`);
     return true;
   }
 
   const scheduled = parseSchedule(routed.text);
   if (scheduled) {
     if (SENSITIVE_TEXT_RE.test(scheduled.text)) {
-      const sent = await sock.sendMessage(chatId, { text: `Je préfère ne pas enregistrer un rappel contenant un secret ou un identifiant sensible. 🌸` }, { quoted: msg });
-      exaucee.markOwnMessage(sent?.key?.id);
+      await sendExaucee(sock, exaucee, chatId, msg, `Je préfère ne pas enregistrer un rappel contenant un secret ou un identifiant sensible. 🌸`);
       return true;
     }
     const task = exaucee.scheduler.schedule({
@@ -182,8 +281,7 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
       runAt: scheduled.runAt,
       action: { type: 'send_message', chatId, text: scheduled.text }
     });
-    const sent = await sock.sendMessage(chatId, { text: `D'accord 🌸 Je te le rappellerai au moment prévu.` }, { quoted: msg });
-    exaucee.markOwnMessage(sent?.key?.id);
+    await sendExaucee(sock, exaucee, chatId, msg, `D'accord 🌸 Je te le rappellerai au moment prévu.`);
     exaucee.audit.write({ type: 'schedule', taskId: task.id, chatId, userId });
     return true;
   }
@@ -213,13 +311,12 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   }
 
   if (!answer) return false;
-  const sent = await sock.sendMessage(chatId, { text: answer.slice(0, 12000) }, { quoted: msg });
-  exaucee.markOwnMessage(sent?.key?.id);
+  await sendExaucee(sock, exaucee, chatId, msg, answer.slice(0, 12000));
   if (!SENSITIVE_TEXT_RE.test(routed.text)) {
     exaucee.memory.remember(ids, { type: 'episode', value: `user: ${routed.text}`, source: 'conversation' });
   }
   exaucee.memory.remember(ids, { type: 'episode', value: `assistant: ${answer}`, source: provider });
-  exaucee.audit.write({ type: 'response', provider, chatId, userId, messageId: sent?.key?.id || null });
+  exaucee.audit.write({ type: 'response', provider, chatId, userId });
   return true;
 }
 
@@ -230,5 +327,6 @@ module.exports = {
   rememberHumanTakeover,
   ensureScheduler,
   sanitizeModelText,
+  handleGameMaster,
   HUMAN_TAKEOVER_MS
 };
