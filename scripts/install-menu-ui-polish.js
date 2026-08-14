@@ -135,11 +135,12 @@ if (hasGeneratedAllMenu && !src.includes('[ALLMENU REAL DISPLAY NAME]')) {
   );
 }
 
-if (!/senderJid:\s*rawSender,\s*displayName/.test(src)) {
-  src = src.replace(
-    /categoryNames,\s*categories,\s*count,\s*senderJid:\s*rawSender,\s*\n\s*currentCategory:/,
-    'categoryNames, categories, count, senderJid: rawSender, displayName,\n          currentCategory:'
-  );
+// Le tracking du menu principal peut contenir imageUrl ou d'autres champs
+// entre senderJid et currentCategory. On cible donc le bloc trackMenu lui-même
+// au lieu de dépendre de l'ordre exact des propriétés.
+const menuTrackRegex = /(trackMenu\(sentMsg\.key\.id,\s*\{[\s\S]{0,700}?senderJid:\s*rawSender,)(?!\s*displayName\b)/;
+if (menuTrackRegex.test(src)) {
+  src = src.replace(menuTrackRegex, '$1 displayName,');
 }
 
 fs.writeFileSync(menuPath, src, 'utf8');
@@ -152,10 +153,14 @@ const basicRequired = [
   '[MENU REAL DISPLAY NAME]',
   'return disciplineMenuText(text);',
   'entry.displayName',
-  'senderJid: rawSender, displayName',
 ];
 for (const marker of basicRequired) {
   if (!final.includes(marker)) throw new Error('[menu-ui] garde-fou absent: ' + marker);
+}
+
+const trackedDisplayNameRegex = /trackMenu\(sentMsg\.key\.id,\s*\{[\s\S]{0,700}?senderJid:\s*rawSender,\s*displayName\b/;
+if (!trackedDisplayNameRegex.test(final)) {
+  throw new Error('[menu-ui] displayName absent du tracking menu principal');
 }
 
 const finalHasAllMenu = final.includes('function buildAllMenuChunks(') || final.includes("if (body === 'allmenu')");
