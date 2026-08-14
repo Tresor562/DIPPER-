@@ -16,7 +16,6 @@ for (const file of [responseStylePath, styleManagerPath, menuPath, handlerPath])
   if (!fs.existsSync(file)) throw new Error(`[global-footer] fichier absent: ${file}`);
 }
 
-// 1) responseStyle : source de vérité globale pour sendMessage + renderResponse.
 let rs = fs.readFileSync(responseStylePath, 'utf8');
 if (!rs.includes(MARKER)) {
   const profilesAnchor = 'const PROFILES = {';
@@ -29,15 +28,14 @@ if (!rs.includes(MARKER)) {
   rs = rs.replace(getProfileOld, getProfileNew);
 
   const sanitizeAnchor = `function sanitizeLegacyText(text, style) {\n  if (typeof text !== 'string' || !text) return text;`;
-  const sanitizeReplacement = `function sanitizeLegacyText(text, style) {\n  if (typeof text !== 'string' || !text) return text;\n  // Le footer canonique utilise le marqueur WhatsApp de citation. Il ne doit\n  // jamais passer dans normalizeLine(), qui supprimerait le caractère \">\".\n  text = String(text).split('\\n').map(line => {\n    const compact = line.trim().replace(/\\*/g, '');\n    if (/^>?\\s*powered by\\s+🌹\\s*(?:mr|mꝛ|𝐌ꝛ).*tresor.*🌹$/iu.test(compact)) return GLOBAL_FOOTER;\n    return line;\n  }).join('\\n');`;
+  const sanitizeReplacement = `function sanitizeLegacyText(text, style) {\n  if (typeof text !== 'string' || !text) return text;\n  text = String(text).split('\\n').map(line => {\n    const compact = line.trim().replace(/\\*/g, '');\n    if (/^>?\\s*powered by\\s+🌹.*🌹$/iu.test(compact)) return GLOBAL_FOOTER;\n    return line;\n  }).join('\\n');`;
   if (!rs.includes(sanitizeAnchor)) throw new Error('[global-footer] sanitizeLegacyText introuvable');
   rs = rs.replace(sanitizeAnchor, sanitizeReplacement);
 
   const decorateAnchor = `function decoratePayload(payload, style) {`;
   if (!rs.includes(decorateAnchor)) throw new Error('[global-footer] decoratePayload introuvable');
-  const helpers = `function ensureGlobalFooter(text) {\n  if (typeof text !== 'string' || !text.trim()) return text;\n  const lines = String(text).replace(/\\r\\n/g, '\\n').split('\\n');\n  const kept = lines.filter(line => {\n    const compact = line.trim().replace(/\\*/g, '');\n    return !/^>?\\s*powered by\\s+🌹\\s*(?:mr|mꝛ|𝐌ꝛ).*tresor.*🌹$/iu.test(compact);\n  });\n  while (kept.length && !kept[kept.length - 1].trim()) kept.pop();\n  return kept.join('\\n') + '\\n\\n' + GLOBAL_FOOTER;\n}\n\nfunction decorateRelayMessage(message, style) {\n  if (!message || typeof message !== 'object') return message;\n  if (message.protocolMessage || message.reactionMessage) return message;\n  const out = { ...message };\n  if (typeof out.conversation === 'string') out.conversation = ensureGlobalFooter(sanitizeLegacyText(out.conversation, style));\n  if (out.extendedTextMessage?.text) out.extendedTextMessage = { ...out.extendedTextMessage, text: ensureGlobalFooter(sanitizeLegacyText(out.extendedTextMessage.text, style)) };\n  if (out.imageMessage?.caption) out.imageMessage = { ...out.imageMessage, caption: ensureGlobalFooter(sanitizeLegacyText(out.imageMessage.caption, style)) };\n  if (out.videoMessage?.caption) out.videoMessage = { ...out.videoMessage, caption: ensureGlobalFooter(sanitizeLegacyText(out.videoMessage.caption, style)) };\n  if (out.interactiveMessage?.body?.text) {\n    out.interactiveMessage = {\n      ...out.interactiveMessage,\n      body: { ...out.interactiveMessage.body, text: ensureGlobalFooter(out.interactiveMessage.body.text) },\n    };\n  }\n  if (out.viewOnceMessage?.message) out.viewOnceMessage = { ...out.viewOnceMessage, message: decorateRelayMessage(out.viewOnceMessage.message, style) };\n  if (out.viewOnceMessageV2?.message) out.viewOnceMessageV2 = { ...out.viewOnceMessageV2, message: decorateRelayMessage(out.viewOnceMessageV2.message, style) };\n  if (out.ephemeralMessage?.message) out.ephemeralMessage = { ...out.ephemeralMessage, message: decorateRelayMessage(out.ephemeralMessage.message, style) };\n  return out;\n}\n\n`;
+  const helpers = `function ensureGlobalFooter(text) {\n  if (typeof text !== 'string' || !text.trim()) return text;\n  const lines = String(text).replace(/\\r\\n/g, '\\n').split('\\n');\n  const kept = lines.filter(line => {\n    const compact = line.trim().replace(/\\*/g, '');\n    return !/^>?\\s*powered by\\s+🌹.*🌹$/iu.test(compact);\n  });\n  while (kept.length && !kept[kept.length - 1].trim()) kept.pop();\n  return kept.join('\\n') + '\\n\\n' + GLOBAL_FOOTER;\n}\n\nfunction decorateRelayMessage(message, style) {\n  if (!message || typeof message !== 'object') return message;\n  if (message.protocolMessage || message.reactionMessage) return message;\n  const out = { ...message };\n  if (typeof out.conversation === 'string') out.conversation = ensureGlobalFooter(sanitizeLegacyText(out.conversation, style));\n  if (out.extendedTextMessage?.text) out.extendedTextMessage = { ...out.extendedTextMessage, text: ensureGlobalFooter(sanitizeLegacyText(out.extendedTextMessage.text, style)) };\n  if (out.imageMessage?.caption) out.imageMessage = { ...out.imageMessage, caption: ensureGlobalFooter(sanitizeLegacyText(out.imageMessage.caption, style)) };\n  if (out.videoMessage?.caption) out.videoMessage = { ...out.videoMessage, caption: ensureGlobalFooter(sanitizeLegacyText(out.videoMessage.caption, style)) };\n  if (out.interactiveMessage?.body?.text) {\n    out.interactiveMessage = { ...out.interactiveMessage, body: { ...out.interactiveMessage.body, text: ensureGlobalFooter(out.interactiveMessage.body.text) } };\n  }\n  if (out.viewOnceMessage?.message) out.viewOnceMessage = { ...out.viewOnceMessage, message: decorateRelayMessage(out.viewOnceMessage.message, style) };\n  if (out.viewOnceMessageV2?.message) out.viewOnceMessageV2 = { ...out.viewOnceMessageV2, message: decorateRelayMessage(out.viewOnceMessageV2.message, style) };\n  if (out.ephemeralMessage?.message) out.ephemeralMessage = { ...out.ephemeralMessage, message: decorateRelayMessage(out.ephemeralMessage.message, style) };\n  return out;\n}\n\n`;
   rs = rs.replace(decorateAnchor, helpers + decorateAnchor);
-
   rs = rs.replace(
     `    if (cleaned !== next.text) { next.text = cleaned; changed = true; }`,
     `    cleaned = ensureGlobalFooter(cleaned);\n    if (cleaned !== next.text) { next.text = cleaned; changed = true; }`
@@ -46,16 +44,13 @@ if (!rs.includes(MARKER)) {
     `    if (cleaned !== next.caption) { next.caption = cleaned; changed = true; }`,
     `    cleaned = ensureGlobalFooter(cleaned);\n    if (cleaned !== next.caption) { next.caption = cleaned; changed = true; }`
   );
-
   rs = rs.replace(
     `  decoratePayload,\n};`,
     `  decoratePayload,\n  ensureGlobalFooter,\n  decorateRelayMessage,\n  GLOBAL_FOOTER,\n};`
   );
   fs.writeFileSync(responseStylePath, rs, 'utf8');
-  console.log('[global-footer] responseStyle globalisé');
 }
 
-// 2) styleManager : même footer même si un module l'utilise directement.
 let sm = fs.readFileSync(styleManagerPath, 'utf8');
 if (!sm.includes(MARKER)) {
   const functionAnchor = `function getPhrases(overrideStyle) {`;
@@ -66,15 +61,14 @@ if (!sm.includes(MARKER)) {
   if (!sm.includes(returnOld)) throw new Error('[global-footer] retour getPhrases introuvable');
   sm = sm.replace(returnOld, returnNew);
   fs.writeFileSync(styleManagerPath, sm, 'utf8');
-  console.log('[global-footer] styleManager globalisé');
 }
 
-// 3) menu : la signature explicite doit être la même, notamment pour les relays.
 let menu = fs.readFileSync(menuPath, 'utf8');
+// Tous les styles du menu héritent du même footer final.
+menu = menu.replace(/footer:\s*\(\)\s*=>\s*`[^`]*`,/g, `footer: () => \`${FOOTER}\`,`);
 menu = menu.replace(/const SIGNATURE = [^;]+;/, `const SIGNATURE = '\\n${FOOTER}'; // ${MARKER}`);
 fs.writeFileSync(menuPath, menu, 'utf8');
 
-// 4) handler : décorer aussi les messages envoyés via relayMessage.
 let handler = fs.readFileSync(handlerPath, 'utf8');
 if (!handler.includes('[GLOBAL FOOTER RELAY]')) {
   const importOld = `const { decoratePayload } = require('./utils/responseStyle');`;
@@ -87,7 +81,6 @@ if (!handler.includes('[GLOBAL FOOTER RELAY]')) {
   if (!handler.includes(relayOld)) throw new Error('[global-footer] appel _origRelay introuvable');
   handler = handler.replace(relayOld, relayNew);
   fs.writeFileSync(handlerPath, handler, 'utf8');
-  console.log('[global-footer] relayMessage globalisé');
 }
 
 for (const file of [responseStylePath, styleManagerPath, menuPath, handlerPath]) {
