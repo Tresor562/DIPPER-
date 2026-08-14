@@ -34,7 +34,7 @@ function buildVcard() {
   ].join('\n');
 }
 
-function buildQuotedContact(jid) {
+function buildSyntheticContact(jid) {
   const ownerJid = `${OWNER_PHONE}@s.whatsapp.net`;
   return {
     key: {
@@ -109,7 +109,21 @@ async function sendCreatorArrival(sock, jid, msg, thumbnail) {
   return sock.sendMessage(jid, { text, contextInfo: getNewsletterContext(thumbnail, 'Arrivée du créateur') }, { quoted: msg });
 }
 
-async function sendOwnerCard(sock, jid, thumbnail) {
+async function sendActualVcard(sock, jid, msg, thumbnail) {
+  return sock.sendMessage(
+    jid,
+    {
+      contacts: {
+        displayName: OWNER_NAME,
+        contacts: [{ displayName: OWNER_NAME, vcard: buildVcard() }],
+      },
+      contextInfo: getNewsletterContext(thumbnail, 'Contact officiel du créateur'),
+    },
+    { quoted: msg }
+  );
+}
+
+async function sendOwnerActions(sock, jid, thumbnail, contactMessage) {
   const text =
     `╭─❑ *CRÉATEUR • THE BIG DIPPER* ❑─⚯\n` +
     `┃🌹 *${OWNER_NAME}*\n` +
@@ -125,7 +139,11 @@ async function sendOwnerCard(sock, jid, thumbnail) {
     contextInfo: getNewsletterContext(thumbnail),
   });
 
-  const generated = generateWAMessageFromContent(jid, { interactiveMessage }, { quoted: buildQuotedContact(jid), userJid: sock.user?.id });
+  const generated = generateWAMessageFromContent(
+    jid,
+    { interactiveMessage },
+    { quoted: contactMessage || buildSyntheticContact(jid), userJid: sock.user?.id }
+  );
   await sock.relayMessage(jid, generated.message, { messageId: generated.key.id, additionalNodes: buildBizNodes(jid) });
   return generated;
 }
@@ -134,7 +152,7 @@ module.exports = {
   name: 'owner',
   aliases: ['souverain', 'creator', 'souverain_dev', 'developpeur', 'maitre', 'developper', 'architecte', 'king'],
   category: '🛠️ Outils généraux',
-  description: 'Affiche la vCard et les réseaux officiels du créateur de THE BIG DIPPER.',
+  description: 'Affiche la vraie vCard et les réseaux officiels du créateur de THE BIG DIPPER.',
   usage: `${config.prefix || '.'}owner`,
   ownerOnly: false,
   groupOnly: false,
@@ -147,7 +165,9 @@ module.exports = {
       const thumbnail = await resolveOwnerProfileThumbnail(sock).catch(() => null);
       await sendCreatorArrival(sock, jid, msg, thumbnail);
       await wait(2200);
-      const sent = await sendOwnerCard(sock, jid, thumbnail);
+      const vcardMessage = await sendActualVcard(sock, jid, msg, thumbnail);
+      await wait(450);
+      const sent = await sendOwnerActions(sock, jid, thumbnail, vcardMessage);
       try { await sock.sendMessage(jid, { react: { text: '🌹', key: msg.key } }); } catch (_) {}
       return sent;
     } catch (error) {
