@@ -6,6 +6,7 @@ const { createExaucee } = require('./core');
 const instances = new Map();
 const humanTakeovers = new Map();
 const HUMAN_TAKEOVER_MS = 10 * 60 * 1000;
+const SENSITIVE_TEXT_RE = /(api[_ -]?key|token|secret|password|mot de passe|credential|cookie|authorization|session(?:id| key| token)?|bearer\s+[a-z0-9._~+\/-]+=*)/i;
 
 function normalizeJid(jid = '') {
   return String(jid).replace(/:\d+(?=@)/, '');
@@ -47,9 +48,7 @@ function hasHumanTakeover(sessionId, chatId) {
 }
 
 function getInstance(sessionId) {
-  if (!instances.has(sessionId)) {
-    instances.set(sessionId, createExaucee());
-  }
+  if (!instances.has(sessionId)) instances.set(sessionId, createExaucee());
   return instances.get(sessionId);
 }
 
@@ -93,13 +92,29 @@ function parseSchedule(text) {
   return { runAt: Date.now() + n * mult, text: m[3].trim() };
 }
 
+function sanitizeModelText(text) {
+  let value = String(text || '');
+  value = value.replace(/(?:bearer\s+)[a-z0-9._~+\/-]+=*/ig, 'Bearer [REDACTED]');
+  value = value.replace(/((?:api[_ -]?key|token|secret|password|credential|authorization)\s*[:=]\s*)[^\s,;]+/ig, '$1[REDACTED]');
+  return value;
+}
+
+function ensureScheduler(exaucee, sock) {
+  exaucee.scheduler.ensureRunner(async dueTask => {
+    if (dueTask.action?.type !== 'send_message') return null;
+    const out = await sock.sendMessage(dueTask.action.chatId, { text: `🌸 ${sanitizeModelText(dueTask.action.text)}` });
+    exaucee.markOwnMessage(out?.key?.id);
+    return { messageId: out?.key?.id || null };
+  });
+}
+
 async function executeDynamic(exaucee, sessionId, text, chatId, sock, msg) {
   const first = String(text || '').trim().split(/\s+/)[0].replace(/^[.!/]/, '').toLowerCase();
   if (!first) return false;
   const record = exaucee.dynamicCommands.get(sessionId, first, { groupId: chatId.endsWith('@g.us') ? chatId : null });
   if (!record) return false;
   if (record.workflow?.type === 'reply') {
-    const sent = await sock.sendMessage(chatId, { text: String(record.workflow.text || '') }, { quoted: msg });
+    const sent = await sock.sendMessage(chatId, { text: sanitizeModelText(record.workflow.text || '') }, { quoted: msg });
     exaucee.markOwnMessage(sent?.key?.id);
     return true;
   }
@@ -112,34 +127,39 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   if (!exaucee.config.enabled) return false;
   if (!msg?.message || !msg?.key?.remoteJid) return false;
 
+  ensureScheduler(exaucee, sock);
   const chatId = msg.key.remoteJid;
   rememberHumanTakeover(sessionId, msg);
 
-  if (msg.key.fromMe) return false;
-  if (isCommand) return false;
+  if (msg.key.fromMe || isCommand) return false;
 
-  const text = exaucee.inspectMessage({
+  const knownBotJids = botJids(sock);
+  const routed = exaucee.inspectMessage({
     msg,
-    botJid: botJids(sock)[0],
+    botJid: knownBotJids[0],
+    botJids: knownBotJids,
     humanTakeover: hasHumanTakeover(sessionId, chatId)
   });
 
-  if (!text.shouldRespond || !text.text.trim()) return false;
+  if (!routed.shouldRespond || !routed.text.trim()) return false;
 
-  // Mentions LID/s.whatsapp.net alternatives: si le routeur n'a pas détecté la
-  // mention exacte, le nom "Exaucée" ou une réponse à elle restent suffisants.
   const userId = actorJid(msg);
   const ids = { sessionId, chatId, userId };
 
-  if (await executeDynamic(exaucee, sessionId, text.text, chatId, sock, msg)) return true;
+  if (await executeDynamic(exaucee, sessionId, routed.text, chatId, sock, msg)) return true;
 
-  const memoryIntent = parseMemoryIntent(text.text);
-  if (memoryIntent) {
+  const memoryIntent = parseMemoryIntent(routed.text);
+  if (memoryIntent && !SENSITIVE_TEXT_RE.test(memoryIntent)) {
     exaucee.memory.remember(ids, { type: 'fact', value: memoryIntent, source: 'explicit-user-memory' });
   }
 
-  const dynamic = parseDynamicReply(text.text);
+  const dynamic = parseDynamicReply(routed.text);
   if (dynamic && (actor.isOwner || actor.isSuperMe || actor.isAdmin)) {
+    if (SENSITIVE_TEXT_RE.test(dynamic.response)) {
+      const sent = await sock.sendMessage(chatId, { text: `Je ne peux pas enregistrer une commande contenant un secret ou un identifiant sensible. 🌸` }, { quoted: msg });
+      exaucee.markOwnMessage(sent?.key?.id);
+      return true;
+    }
     exaucee.dynamicCommands.define(sessionId, {
       name: dynamic.name,
       groupId: chatId.endsWith('@g.us') ? chatId : null,
@@ -150,18 +170,17 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
     return true;
   }
 
-  const scheduled = parseSchedule(text.text);
+  const scheduled = parseSchedule(routed.text);
   if (scheduled) {
+    if (SENSITIVE_TEXT_RE.test(scheduled.text)) {
+      const sent = await sock.sendMessage(chatId, { text: `Je préfère ne pas enregistrer un rappel contenant un secret ou un identifiant sensible. 🌸` }, { quoted: msg });
+      exaucee.markOwnMessage(sent?.key?.id);
+      return true;
+    }
     const task = exaucee.scheduler.schedule({
       id: `reminder_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       runAt: scheduled.runAt,
       action: { type: 'send_message', chatId, text: scheduled.text }
-    });
-    exaucee.scheduler.ensureRunner(async dueTask => {
-      if (dueTask.action?.type !== 'send_message') return null;
-      const out = await sock.sendMessage(dueTask.action.chatId, { text: `🌸 ${dueTask.action.text}` });
-      exaucee.markOwnMessage(out?.key?.id);
-      return { messageId: out?.key?.id || null };
     });
     const sent = await sock.sendMessage(chatId, { text: `D'accord 🌸 Je te le rappellerai au moment prévu.` }, { quoted: msg });
     exaucee.markOwnMessage(sent?.key?.id);
@@ -179,14 +198,14 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
       const role = value.slice(0, sep) === 'assistant' ? 'assistant' : 'user';
       return [{ role, content: value.slice(sep + 2) }];
     })),
-    { role: 'user', content: text.text }
+    { role: 'user', content: routed.text }
   ];
 
   let answer;
   let provider = 'fallback';
   try {
     const result = await exaucee.ai.complete({ messages });
-    answer = result.text.trim();
+    answer = sanitizeModelText(result.text).trim();
     provider = result.provider;
   } catch (error) {
     answer = `Je suis bien là 🌸 Mais mon moteur IA gratuit est momentanément indisponible. Réessaie dans un instant.`;
@@ -196,7 +215,9 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   if (!answer) return false;
   const sent = await sock.sendMessage(chatId, { text: answer.slice(0, 12000) }, { quoted: msg });
   exaucee.markOwnMessage(sent?.key?.id);
-  exaucee.memory.remember(ids, { type: 'episode', value: `user: ${text.text}`, source: 'conversation' });
+  if (!SENSITIVE_TEXT_RE.test(routed.text)) {
+    exaucee.memory.remember(ids, { type: 'episode', value: `user: ${routed.text}`, source: 'conversation' });
+  }
   exaucee.memory.remember(ids, { type: 'episode', value: `assistant: ${answer}`, source: provider });
   exaucee.audit.write({ type: 'response', provider, chatId, userId, messageId: sent?.key?.id || null });
   return true;
@@ -207,5 +228,7 @@ module.exports = {
   getInstance,
   hasHumanTakeover,
   rememberHumanTakeover,
+  ensureScheduler,
+  sanitizeModelText,
   HUMAN_TAKEOVER_MS
 };
