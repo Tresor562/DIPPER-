@@ -2,6 +2,7 @@
 
 const config = require('../config');
 const styleManager = require('./styleManager');
+const sharp = require('sharp');
 const {
   proto,
   generateWAMessageFromContent,
@@ -113,7 +114,19 @@ function buildBizNodes(jid) {
     : [{ tag: 'bot', attrs: { biz_bot: '1' } }, bizNode];
 }
 
-function getNewsletterContext(imageBuffer) {
+async function makePreviewThumbnail(imageBuffer) {
+  if (!Buffer.isBuffer(imageBuffer) || imageBuffer.length < 256) return null;
+  try {
+    return await sharp(imageBuffer)
+      .resize(320, 320, { fit: 'cover', position: 'centre', withoutEnlargement: true })
+      .jpeg({ quality: 72, mozjpeg: true })
+      .toBuffer();
+  } catch (_) {
+    return imageBuffer.length <= 120 * 1024 ? imageBuffer : null;
+  }
+}
+
+function getNewsletterContext(thumbnail) {
   const contextInfo = {
     forwardingScore: 999,
     isForwarded: true,
@@ -132,8 +145,8 @@ function getNewsletterContext(imageBuffer) {
       renderLargerThumbnail: true,
     },
   };
-  if (Buffer.isBuffer(imageBuffer) && imageBuffer.length > 1000) {
-    contextInfo.externalAdReply.thumbnail = imageBuffer;
+  if (Buffer.isBuffer(thumbnail) && thumbnail.length > 1000) {
+    contextInfo.externalAdReply.thumbnail = thumbnail;
   }
   return contextInfo;
 }
@@ -146,6 +159,7 @@ async function sendSpecialPresentation(sock, jid, options = {}) {
     commandName = '',
   } = options;
 
+  const thumbnail = await makePreviewThumbnail(imageBuffer);
   const interactiveMessage = proto.Message.InteractiveMessage.create({
     body: proto.Message.InteractiveMessage.Body.create({ text: String(text || '') }),
     footer: proto.Message.InteractiveMessage.Footer.create({ text: '' }),
@@ -157,7 +171,7 @@ async function sendSpecialPresentation(sock, jid, options = {}) {
       messageParamsJson: '{}',
       messageVersion: 1,
     }),
-    contextInfo: getNewsletterContext(imageBuffer),
+    contextInfo: getNewsletterContext(thumbnail),
   });
 
   const generated = generateWAMessageFromContent(
