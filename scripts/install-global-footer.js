@@ -9,7 +9,8 @@ const responseStylePath = path.join(ROOT, 'utils', 'responseStyle.js');
 const styleManagerPath = path.join(ROOT, 'utils', 'styleManager.js');
 const menuPath = path.join(ROOT, 'commands', 'general_tools', 'menu.js');
 const handlerPath = path.join(ROOT, 'handler.js');
-const FOOTER = '>Powered by 🌹 Mr Tresor 🌹';
+const LEGACY_FOOTER = '>Powered by 🌹 Mr Tresor 🌹';
+const FOOTER = '> Powered by 🌹 Mr Tresor 🌹';
 const MARKER = '[GLOBAL QUOTED FOOTER — MR TRESOR]';
 
 for (const file of [responseStylePath, styleManagerPath, menuPath, handlerPath]) {
@@ -48,8 +49,9 @@ if (!rs.includes(MARKER)) {
     `  decoratePayload,\n};`,
     `  decoratePayload,\n  ensureGlobalFooter,\n  decorateRelayMessage,\n  GLOBAL_FOOTER,\n};`
   );
-  fs.writeFileSync(responseStylePath, rs, 'utf8');
 }
+rs = rs.split(LEGACY_FOOTER).join(FOOTER);
+fs.writeFileSync(responseStylePath, rs, 'utf8');
 
 let sm = fs.readFileSync(styleManagerPath, 'utf8');
 if (!sm.includes(MARKER)) {
@@ -60,11 +62,12 @@ if (!sm.includes(MARKER)) {
   const returnNew = `  const persona = PERSONAS[s] || PERSONAS[0];\n  return { ...persona, footer: () => GLOBAL_FOOTER };`;
   if (!sm.includes(returnOld)) throw new Error('[global-footer] retour getPhrases introuvable');
   sm = sm.replace(returnOld, returnNew);
-  fs.writeFileSync(styleManagerPath, sm, 'utf8');
 }
+sm = sm.split(LEGACY_FOOTER).join(FOOTER);
+fs.writeFileSync(styleManagerPath, sm, 'utf8');
 
 let menu = fs.readFileSync(menuPath, 'utf8');
-// Tous les styles du menu héritent du même footer final.
+menu = menu.split(LEGACY_FOOTER).join(FOOTER);
 menu = menu.replace(/footer:\s*\(\)\s*=>\s*`[^`]*`,/g, `footer: () => \`${FOOTER}\`,`);
 menu = menu.replace(/const SIGNATURE = [^;]+;/, `const SIGNATURE = '\\n${FOOTER}'; // ${MARKER}`);
 fs.writeFileSync(menuPath, menu, 'utf8');
