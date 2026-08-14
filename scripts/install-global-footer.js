@@ -1,0 +1,107 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const ROOT = path.join(__dirname, '..');
+const responseStylePath = path.join(ROOT, 'utils', 'responseStyle.js');
+const styleManagerPath = path.join(ROOT, 'utils', 'styleManager.js');
+const menuPath = path.join(ROOT, 'commands', 'general_tools', 'menu.js');
+const handlerPath = path.join(ROOT, 'handler.js');
+const FOOTER = '>Powered by 🌹 Mr Tresor 🌹';
+const MARKER = '[GLOBAL QUOTED FOOTER — MR TRESOR]';
+
+for (const file of [responseStylePath, styleManagerPath, menuPath, handlerPath]) {
+  if (!fs.existsSync(file)) throw new Error(`[global-footer] fichier absent: ${file}`);
+}
+
+// 1) responseStyle : source de vérité globale pour sendMessage + renderResponse.
+let rs = fs.readFileSync(responseStylePath, 'utf8');
+if (!rs.includes(MARKER)) {
+  const profilesAnchor = 'const PROFILES = {';
+  if (!rs.includes(profilesAnchor)) throw new Error('[global-footer] PROFILES introuvable');
+  rs = rs.replace(profilesAnchor, `const GLOBAL_FOOTER = '${FOOTER}'; // ${MARKER}\n\n${profilesAnchor}`);
+
+  const getProfileOld = `function getProfile(style) {\n  return PROFILES[activeStyle(style)] || PROFILES[0];\n}`;
+  const getProfileNew = `function getProfile(style) {\n  const profile = PROFILES[activeStyle(style)] || PROFILES[0];\n  return { ...profile, signature: GLOBAL_FOOTER };\n}`;
+  if (!rs.includes(getProfileOld)) throw new Error('[global-footer] getProfile introuvable');
+  rs = rs.replace(getProfileOld, getProfileNew);
+
+  const sanitizeAnchor = `function sanitizeLegacyText(text, style) {\n  if (typeof text !== 'string' || !text) return text;`;
+  const sanitizeReplacement = `function sanitizeLegacyText(text, style) {\n  if (typeof text !== 'string' || !text) return text;\n  // Le footer canonique utilise le marqueur WhatsApp de citation. Il ne doit\n  // jamais passer dans normalizeLine(), qui supprimerait le caractère \">\".\n  text = String(text).split('\\n').map(line => {\n    const compact = line.trim().replace(/\\*/g, '');\n    if (/^>?\\s*powered by\\s+🌹\\s*(?:mr|mꝛ|𝐌ꝛ).*tresor.*🌹$/iu.test(compact)) return GLOBAL_FOOTER;\n    return line;\n  }).join('\\n');`;
+  if (!rs.includes(sanitizeAnchor)) throw new Error('[global-footer] sanitizeLegacyText introuvable');
+  rs = rs.replace(sanitizeAnchor, sanitizeReplacement);
+
+  const decorateAnchor = `function decoratePayload(payload, style) {`;
+  if (!rs.includes(decorateAnchor)) throw new Error('[global-footer] decoratePayload introuvable');
+  const helpers = `function ensureGlobalFooter(text) {\n  if (typeof text !== 'string' || !text.trim()) return text;\n  const lines = String(text).replace(/\\r\\n/g, '\\n').split('\\n');\n  const kept = lines.filter(line => {\n    const compact = line.trim().replace(/\\*/g, '');\n    return !/^>?\\s*powered by\\s+🌹\\s*(?:mr|mꝛ|𝐌ꝛ).*tresor.*🌹$/iu.test(compact);\n  });\n  while (kept.length && !kept[kept.length - 1].trim()) kept.pop();\n  return kept.join('\\n') + '\\n\\n' + GLOBAL_FOOTER;\n}\n\nfunction decorateRelayMessage(message, style) {\n  if (!message || typeof message !== 'object') return message;\n  if (message.protocolMessage || message.reactionMessage) return message;\n  const out = { ...message };\n  if (typeof out.conversation === 'string') out.conversation = ensureGlobalFooter(sanitizeLegacyText(out.conversation, style));\n  if (out.extendedTextMessage?.text) out.extendedTextMessage = { ...out.extendedTextMessage, text: ensureGlobalFooter(sanitizeLegacyText(out.extendedTextMessage.text, style)) };\n  if (out.imageMessage?.caption) out.imageMessage = { ...out.imageMessage, caption: ensureGlobalFooter(sanitizeLegacyText(out.imageMessage.caption, style)) };\n  if (out.videoMessage?.caption) out.videoMessage = { ...out.videoMessage, caption: ensureGlobalFooter(sanitizeLegacyText(out.videoMessage.caption, style)) };\n  if (out.interactiveMessage?.body?.text) {\n    out.interactiveMessage = {\n      ...out.interactiveMessage,\n      body: { ...out.interactiveMessage.body, text: ensureGlobalFooter(out.interactiveMessage.body.text) },\n    };\n  }\n  if (out.viewOnceMessage?.message) out.viewOnceMessage = { ...out.viewOnceMessage, message: decorateRelayMessage(out.viewOnceMessage.message, style) };\n  if (out.viewOnceMessageV2?.message) out.viewOnceMessageV2 = { ...out.viewOnceMessageV2, message: decorateRelayMessage(out.viewOnceMessageV2.message, style) };\n  if (out.ephemeralMessage?.message) out.ephemeralMessage = { ...out.ephemeralMessage, message: decorateRelayMessage(out.ephemeralMessage.message, style) };\n  return out;\n}\n\n`;
+  rs = rs.replace(decorateAnchor, helpers + decorateAnchor);
+
+  rs = rs.replace(
+    `    if (cleaned !== next.text) { next.text = cleaned; changed = true; }`,
+    `    cleaned = ensureGlobalFooter(cleaned);\n    if (cleaned !== next.text) { next.text = cleaned; changed = true; }`
+  );
+  rs = rs.replace(
+    `    if (cleaned !== next.caption) { next.caption = cleaned; changed = true; }`,
+    `    cleaned = ensureGlobalFooter(cleaned);\n    if (cleaned !== next.caption) { next.caption = cleaned; changed = true; }`
+  );
+
+  rs = rs.replace(
+    `  decoratePayload,\n};`,
+    `  decoratePayload,\n  ensureGlobalFooter,\n  decorateRelayMessage,\n  GLOBAL_FOOTER,\n};`
+  );
+  fs.writeFileSync(responseStylePath, rs, 'utf8');
+  console.log('[global-footer] responseStyle globalisé');
+}
+
+// 2) styleManager : même footer même si un module l'utilise directement.
+let sm = fs.readFileSync(styleManagerPath, 'utf8');
+if (!sm.includes(MARKER)) {
+  const functionAnchor = `function getPhrases(overrideStyle) {`;
+  if (!sm.includes(functionAnchor)) throw new Error('[global-footer] getPhrases introuvable');
+  sm = sm.replace(functionAnchor, `const GLOBAL_FOOTER = '${FOOTER}'; // ${MARKER}\n\n${functionAnchor}`);
+  const returnOld = `  return PERSONAS[s] || PERSONAS[0];`;
+  const returnNew = `  const persona = PERSONAS[s] || PERSONAS[0];\n  return { ...persona, footer: () => GLOBAL_FOOTER };`;
+  if (!sm.includes(returnOld)) throw new Error('[global-footer] retour getPhrases introuvable');
+  sm = sm.replace(returnOld, returnNew);
+  fs.writeFileSync(styleManagerPath, sm, 'utf8');
+  console.log('[global-footer] styleManager globalisé');
+}
+
+// 3) menu : la signature explicite doit être la même, notamment pour les relays.
+let menu = fs.readFileSync(menuPath, 'utf8');
+menu = menu.replace(/const SIGNATURE = [^;]+;/, `const SIGNATURE = '\\n${FOOTER}'; // ${MARKER}`);
+fs.writeFileSync(menuPath, menu, 'utf8');
+
+// 4) handler : décorer aussi les messages envoyés via relayMessage.
+let handler = fs.readFileSync(handlerPath, 'utf8');
+if (!handler.includes('[GLOBAL FOOTER RELAY]')) {
+  const importOld = `const { decoratePayload } = require('./utils/responseStyle');`;
+  const importNew = `const { decoratePayload, decorateRelayMessage } = require('./utils/responseStyle');`;
+  if (handler.includes(importOld)) handler = handler.replace(importOld, importNew);
+  else if (!handler.includes('decorateRelayMessage')) throw new Error('[global-footer] import responseStyle du handler introuvable');
+
+  const relayOld = `        const result = await _origRelay(jid, message, opts);`;
+  const relayNew = `        const disciplinedRelay = decorateRelayMessage(message); // [GLOBAL FOOTER RELAY]\n        const result = await _origRelay(jid, disciplinedRelay, opts);`;
+  if (!handler.includes(relayOld)) throw new Error('[global-footer] appel _origRelay introuvable');
+  handler = handler.replace(relayOld, relayNew);
+  fs.writeFileSync(handlerPath, handler, 'utf8');
+  console.log('[global-footer] relayMessage globalisé');
+}
+
+for (const file of [responseStylePath, styleManagerPath, menuPath, handlerPath]) {
+  const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  if (check.status !== 0) throw new Error(`[global-footer] syntaxe invalide ${path.relative(ROOT, file)}: ${check.stderr || check.stdout}`);
+}
+
+const finalRs = fs.readFileSync(responseStylePath, 'utf8');
+const finalMenu = fs.readFileSync(menuPath, 'utf8');
+const finalHandler = fs.readFileSync(handlerPath, 'utf8');
+for (const required of [FOOTER, 'ensureGlobalFooter', 'decorateRelayMessage']) {
+  if (!finalRs.includes(required)) throw new Error(`[global-footer] responseStyle incomplet: ${required}`);
+}
+if (!finalMenu.includes(FOOTER)) throw new Error('[global-footer] signature menu absente');
+if (!finalHandler.includes('[GLOBAL FOOTER RELAY]')) throw new Error('[global-footer] relay non protégé');
+
+console.log(`[global-footer] ✅ footer universel actif: ${FOOTER}`);
