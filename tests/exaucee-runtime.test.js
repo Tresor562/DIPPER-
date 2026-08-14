@@ -9,6 +9,7 @@ const path = require('path');
 const { routeMessage } = require('../ai_chat/router/socialRouter');
 const { PersistentScheduler } = require('../ai_chat/scheduler/persistentScheduler');
 const { DynamicCommandRegistry } = require('../ai_chat/dynamic/registry');
+const { GameMaster } = require('../ai_chat/games/gameMaster');
 const { createExaucee, safeSessionId } = require('../ai_chat/core');
 const { sanitizeModelText } = require('../ai_chat/runtime');
 
@@ -109,6 +110,33 @@ test('deux sessions Exaucée ont des fichiers d’état distincts', () => {
   b.scheduler.schedule({ id: 'only-b', runAt: Date.now() + 99999, action: { type: 'noop' } });
   assert.deepEqual(a.scheduler.list().map(x => x.id), ['only-a']);
   assert.deepEqual(b.scheduler.list().map(x => x.id), ['only-b']);
+});
+
+test('Game Master termine un quiz et conserve le score après redémarrage', () => {
+  const root = makeTmp();
+  const file = path.join(root, 'games.json');
+  const games = new GameMaster({ file });
+  const started = games.startQuiz('g@g.us', { by: 'u1@s.whatsapp.net', category: 'general', rounds: 1 });
+  const current = started.game.questions[0];
+  const result = games.answerQuiz('g@g.us', 'u1@s.whatsapp.net', current.a[0]);
+  assert.equal(result.correct, true);
+  assert.equal(result.finished, true);
+  assert.equal(result.scores['u1@s.whatsapp.net'], 1);
+
+  const restarted = new GameMaster({ file });
+  assert.equal(restarted.get('g@g.us').status, 'finished');
+  assert.equal(restarted.scoreboard('g@g.us')[0].score, 1);
+});
+
+test('Game Master Action/Vérité garde un historique sûr', () => {
+  const root = makeTmp();
+  const gameMaster = new GameMaster({ file: path.join(root, 'games.json') });
+  gameMaster.startTruthOrDare('g@g.us', { by: 'u1@s.whatsapp.net' });
+  const turn = gameMaster.nextTruthOrDare('g@g.us', 'u2@s.whatsapp.net', 'vérité');
+  assert.equal(turn.handled, true);
+  assert.equal(turn.type, 'vérité');
+  assert.ok(turn.prompt.length > 5);
+  assert.equal(gameMaster.get('g@g.us').history.length, 1);
 });
 
 test('safeSessionId neutralise les séparateurs de chemin', () => {
