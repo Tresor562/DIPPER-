@@ -9,6 +9,7 @@ const { ZeroCostRouter } = require('../ai/zeroCostRouter');
 const { CommandBridge } = require('../tools/commandBridge');
 const { PersistentScheduler } = require('../scheduler/persistentScheduler');
 const { GameRegistry, quizEngine, truthOrDareEngine } = require('../games/registry');
+const { GameMaster } = require('../games/gameMaster');
 const { DynamicCommandRegistry } = require('../dynamic/registry');
 const { DecisionLog } = require('../audit/decisionLog');
 
@@ -24,6 +25,7 @@ function createExaucee(options = {}) {
   const commandBridge = options.commandBridge || new CommandBridge({ commands });
   const scheduler = options.scheduler || new PersistentScheduler({ file: path.join(root, 'sessions', sessionId, 'tasks.json') });
   const games = options.games || new GameRegistry();
+  const gameMaster = options.gameMaster || new GameMaster({ file: path.join(root, 'sessions', sessionId, 'games.json') });
   const dynamicCommands = options.dynamicCommands || new DynamicCommandRegistry({ file: path.join(root, 'sessions', sessionId, 'dynamic-commands.json') });
   const audit = options.audit || new DecisionLog({ root: path.join(root, 'audit', sessionId) });
   const recentExauceeMessageIds = new Set();
@@ -40,6 +42,7 @@ function createExaucee(options = {}) {
     commandBridge,
     scheduler,
     games,
+    gameMaster,
     dynamicCommands,
     audit,
     markOwnMessage(id) {
