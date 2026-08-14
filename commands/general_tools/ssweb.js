@@ -1,81 +1,39 @@
-/**
- * SSWeb - Screenshot Website Command
- * 𝐃𝐚𝐫𝐤 Edition
- */
-
-const axios = require('axios');
-const APIs = require('../../utils/api');
-const { takeScreenshot } = require('../../utils/screenshotApi');
+'use strict';
 const config = require('../../config.js');
+const { takeScreenshot, normalizeUrl } = require('../../utils/screenshotApi');
 
-// Fonction pour le style Small Caps (Cohérence visuelle du sanctuaire)
 function toSmallCaps(text) {
-  const normal = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const smallCaps = "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ0123456789";
-
-  const cleanedText = text.toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); 
-
-  return cleanedText.split('').map(c => {
-    const index = normal.indexOf(c);
-    return index !== -1 ? smallCaps[index] : c;
+  const normal = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const smallCaps = 'ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ0123456789';
+  return String(text).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split('').map(c => {
+    const i = normal.indexOf(c); return i !== -1 ? smallCaps[i] : c;
   }).join('');
 }
 
 module.exports = {
-  name: 'ssweb',
-  aliases: ['screenshot', 'ss', 'webss', 'capture'],
+  name: 'ssweb', aliases: ['screenshot', 'ss', 'webss', 'capture'],
   category: '🛠️ Outils généraux',
-  description: '『 𝐃𝐈𝐏𝐏𝐄𝐑 』➪ ᴘʀᴇɴᴅ ᴜɴᴇ ᴄᴀᴘᴛᴜʀᴇ ᴅ\'ᴇᴄʀᴀɴ ᴅ\'ᴜɴ sᴀɴᴄᴛᴜᴀɪʀᴇ ᴡᴇʙ',
-  usage: `${config.prefix || '.'}ssweb [lien du site]`,
-  groupOnly: false,
-  adminOnly: false,
-  botAdminNeeded: false,
-
+  description: '『 𝐃𝐈𝐏𝐏𝐄𝐑 』➪ capture mobile d’un site web',
+  usage: `${config.prefix || '.'}ssweb <url>`,
+  groupOnly: false, adminOnly: false, botAdminNeeded: false,
   async execute(sock, msg, args, extra) {
-    const { reply } = extra;
-    const chatId = extra.from;
+    const { reply, from, phrases } = extra;
+    if (!args.length) return reply(`*📌 ᴜsᴀɢᴇ :* \`${config.prefix || '.'}ssweb <url>\`\n\n${phrases.footer()}`);
+    let url;
+    try { url = normalizeUrl(args.join(' ')); }
+    catch (err) { return reply(`*❌ ${toSmallCaps(err.message)}*\n\n${phrases.footer()}`); }
 
+    await sock.sendMessage(from, { react: { text: '📱', key: msg.key } }).catch(() => {});
     try {
-      if (args.length === 0) {
-        return reply(
-          `*⚠️ ${toSmallCaps('echec de l\'invocation')}*\n\n` +
-          `*┃* 🔮 *${toSmallCaps('indique ladresse dun sanctuaire web')} !*\n` +
-          `*┃* 💡 *${toSmallCaps('exemple')} :* \`.ssweb google.com\`\n\n` +
-          extra.phrases.footer()
-        );
-      }
-
-      let url = args.join(' ');
-
-      // Auto-fix : Ajoute https:// si l'utilisateur l'oublie
-      if (!url.startsWith('http')) {
-        url = 'https://' + url;
-      }
-
-      // Petite réaction d'attente
-      await sock.sendMessage(chatId, {
-        react: { text: '📸', key: msg.key }
-      });
-
-      // Appel à l'API
-      const screenshotBuffer = await takeScreenshot(url, 'mobile');
-
-      const captionText = 
-          `*╭╼≪• 🖼️ ᴠɪsɪᴏɴ ᴅᴜ sᴀɴᴄᴛᴜᴀɪʀᴇ •≫╾╮*\n` +
-          `*┃* 🌐 *${toSmallCaps('source')} :* ${url}\n\n` +
-          `*♛ ${toSmallCaps('jesus est roi de ce sanctuaire web')} ♛*\n\n` +
-          extra.phrases.footer();
-
-      // Envoi de l'image de capture
-      await sock.sendMessage(chatId, {
-        image: screenshotBuffer,
-        caption: captionText
+      const image = await takeScreenshot(url, 'mobile');
+      await sock.sendMessage(from, {
+        image,
+        caption: `╭╼≪• *📱 ${toSmallCaps('capture mobile')}* •≫╾╮\n┃ 🌐 *${toSmallCaps('url')}* : ${url}\n╰━━━━━━━━━━━━━━━━━╯\n\n${phrases.footer()}`,
       }, { quoted: msg });
-
-    } catch (error) {
-      console.error('SSWeb command error:', error);
-      await reply(`*❌ ${toSmallCaps('erreur')} :* ${toSmallCaps('impossible de capturer ce sanctuaire')} (${error.message})\n\n${extra.phrases.footer()}`);
+      await sock.sendMessage(from, { react: { text: '✅', key: msg.key } }).catch(() => {});
+    } catch (err) {
+      await sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
+      return reply(`*❌ ${toSmallCaps('capture impossible')} :* _${err.message}_\n\n${phrases.footer()}`);
     }
-  }
+  },
 };
