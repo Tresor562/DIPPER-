@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const persona = require('../personality/persona');
 const { getConfig } = require('../config');
 const { MemoryStore } = require('../memory/store');
@@ -11,22 +12,27 @@ const { GameRegistry, quizEngine, truthOrDareEngine } = require('../games/regist
 const { DynamicCommandRegistry } = require('../dynamic/registry');
 const { DecisionLog } = require('../audit/decisionLog');
 
+const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'default';
+
 function createExaucee(options = {}) {
   const config = { ...getConfig(), ...(options.config || {}) };
-  const memory = options.memory || new MemoryStore();
+  const sessionId = safeSessionId(options.sessionId || 'default');
+  const root = options.root || path.join(process.cwd(), 'data', 'exaucee');
+  const memory = options.memory || new MemoryStore({ root: path.join(root, 'memory') });
   const ai = options.ai || new ZeroCostRouter(config);
   const commands = options.commands || global.commands || new Map();
   const commandBridge = options.commandBridge || new CommandBridge({ commands });
-  const scheduler = options.scheduler || new PersistentScheduler();
+  const scheduler = options.scheduler || new PersistentScheduler({ file: path.join(root, 'sessions', sessionId, 'tasks.json') });
   const games = options.games || new GameRegistry();
-  const dynamicCommands = options.dynamicCommands || new DynamicCommandRegistry();
-  const audit = options.audit || new DecisionLog();
+  const dynamicCommands = options.dynamicCommands || new DynamicCommandRegistry({ file: path.join(root, 'sessions', sessionId, 'dynamic-commands.json') });
+  const audit = options.audit || new DecisionLog({ root: path.join(root, 'audit', sessionId) });
   const recentExauceeMessageIds = new Set();
 
   if (!games.engines.has('quiz')) games.registerEngine(quizEngine);
   if (!games.engines.has('truth-or-dare')) games.registerEngine(truthOrDareEngine);
 
   return {
+    sessionId,
     persona,
     config,
     memory,
@@ -41,12 +47,12 @@ function createExaucee(options = {}) {
       recentExauceeMessageIds.add(id);
       if (recentExauceeMessageIds.size > 1000) recentExauceeMessageIds.delete(recentExauceeMessageIds.values().next().value);
     },
-    inspectMessage({ msg, botJid, humanTakeover = false }) {
-      const decision = routeMessage({ msg, botJid, recentExauceeMessageIds, humanTakeover });
-      audit.write({ type: 'route', messageId: msg?.key?.id, chatId: msg?.key?.remoteJid, decision });
+    inspectMessage({ msg, botJid, botJids = [], humanTakeover = false }) {
+      const decision = routeMessage({ msg, botJid, botJids, recentExauceeMessageIds, humanTakeover });
+      audit.write({ type: 'route', sessionId, messageId: msg?.key?.id, chatId: msg?.key?.remoteJid, decision });
       return { ...decision, text: getText(msg?.message || {}) };
     }
   };
 }
 
-module.exports = { createExaucee };
+module.exports = { createExaucee, safeSessionId };
