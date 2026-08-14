@@ -2,12 +2,39 @@ name: Validate commands
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/exaucee]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 jobs:
+  exaucee:
+    name: Exaucee runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install production dependencies
+        run: npm install --omit=dev
+      - name: Run Exaucee tests
+        run: node --test tests/exaucee-core.test.js tests/exaucee-runtime.test.js
+      - name: Install Exaucee handler hook
+        run: node scripts/install-exaucee.js
+      - name: Verify final handler syntax
+        run: node --check handler.js
+      - name: Verify hook idempotence
+        run: node scripts/install-exaucee.js
+      - name: Verify Exaucee module syntax
+        run: |
+          node --check ai_chat/runtime.js
+          node --check ai_chat/core/index.js
+          node --check ai_chat/router/socialRouter.js
+          node --check ai_chat/scheduler/persistentScheduler.js
+          node --check ai_chat/dynamic/registry.js
+
   menu-images:
     name: Menu image links
     runs-on: ubuntu-latest
