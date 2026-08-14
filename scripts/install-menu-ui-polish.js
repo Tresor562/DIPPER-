@@ -18,27 +18,23 @@ function replaceRegion(startNeedle, endNeedle, replacement, label) {
   src = src.slice(0, start) + replacement + src.slice(end);
 }
 
-// 1) Heure du Bénin fiable. On ne reparsse jamais une date localisée fr-FR,
-// car Node peut la considérer invalide et tomber systématiquement sur Bonne nuit.
 if (!src.includes('[BENIN GREETING SAFE]')) {
   replaceRegion(
     'function getGreeting() {',
     '// Heure formatée Bénin',
-    `function getGreeting() { // [BENIN GREETING SAFE]\n  let hour;\n  try {\n    const parts = new Intl.DateTimeFormat('en-GB', {\n      timeZone: 'Africa/Porto-Novo',\n      hour: '2-digit',\n      hourCycle: 'h23',\n    }).formatToParts(new Date());\n    hour = Number(parts.find(part => part.type === 'hour')?.value);\n  } catch (_) {\n    hour = (new Date().getUTCHours() + 1) % 24;\n  }\n  if (!Number.isFinite(hour)) hour = (new Date().getUTCHours() + 1) % 24;\n  if (hour >= 5  && hour < 12) return 'Bonjour 🌞';\n  if (hour >= 12 && hour < 17) return 'Bon après-midi ☀️';\n  if (hour >= 17 && hour < 21) return 'Bonsoir 🌙';\n  return 'Bonne nuit 🌌';\n}\n\n// Heure formatée Bénin`,
+    `function getGreeting() { // [BENIN GREETING SAFE]\n  let hour;\n  try {\n    const parts = new Intl.DateTimeFormat('en-GB', {\n      timeZone: 'Africa/Porto-Novo',\n      hour: '2-digit',\n      hourCycle: 'h23',\n    }).formatToParts(new Date());\n    hour = Number(parts.find(part => part.type === 'hour')?.value);\n  } catch (_) {\n    hour = (new Date().getUTCHours() + 1) % 24;\n  }\n  if (!Number.isFinite(hour)) hour = (new Date().getUTCHours() + 1) % 24;\n  if (hour >= 5  && hour < 12) return 'Bonjour 🌞';\n  if (hour >= 12 && hour < 17) return 'Bon après-midi ☀️';\n  if (hour >= 17 && hour < 21) return 'Bonsoir 🌙';\n  return 'Bonne nuit 🌌';\n}\n\n`,
     'salutation horaire'
   );
 }
 
-// 2) Helpers communs : vrai nom visible + lignes sans colonnes artificielles.
 if (!src.includes(MARKER)) {
   const anchor = '// ── Construire l\'en-tête immersif — 10 styles thématiques ─────';
   const pos = src.indexOf(anchor);
   if (pos < 0) throw new Error('[menu-ui] ancre buildImmersiveHeader absente');
-  const helpers = `// ${MARKER}\nfunction sanitizeDisplayName(value) {\n  const clean = String(value || '').replace(/\\s+/g, ' ').trim();\n  if (!clean) return '';\n  return clean.length > 32 ? clean.slice(0, 31) + '…' : clean;\n}\n\nfunction disciplineMenuText(text) {\n  return String(text || '').split('\\n').map(line => {\n    // Les espaces servant à simuler des colonnes se décalent selon la police\n    // et la largeur du téléphone. Une seule espace avant ':'/'»' reste stable.\n    return line.replace(/[ \\t]{2,}(?=[:»])/g, ' ');\n  }).join('\\n');\n}\n\n`;
+  const helpers = `// ${MARKER}\nfunction sanitizeDisplayName(value) {\n  const clean = String(value || '').replace(/\\s+/g, ' ').trim();\n  if (!clean) return '';\n  return clean.length > 32 ? clean.slice(0, 31) + '…' : clean;\n}\n\nfunction disciplineMenuText(text) {\n  return String(text || '').split('\\n').map(line =>\n    line.replace(/[ \\t]{2,}(?=[:»])/g, ' ')\n  ).join('\\n');\n}\n\n`;
   src = src.slice(0, pos) + helpers + src.slice(pos);
 }
 
-// 3) buildImmersiveHeader reçoit le nom WhatsApp réel du message.
 src = src.replace(
   'function buildImmersiveHeader(style, senderJid, count, botName) {',
   'function buildImmersiveHeader(style, senderJid, count, botName, displayName = \'\') {'
@@ -64,7 +60,6 @@ immersive = immersive.replace(
 );
 src = src.slice(0, immersiveStart) + immersive + src.slice(immersiveEnd);
 
-// 4) L'aperçu reçoit et conserve le displayName, y compris après réponse "0".
 src = src.replace(
   'function buildCategoryOverview(style, botName, ownerName, userRank, prefix, categoryNames, categories, count, senderJid) {',
   'function buildCategoryOverview(style, botName, ownerName, userRank, prefix, categoryNames, categories, count, senderJid, displayName = \'\') {'
@@ -73,18 +68,21 @@ src = src.replace(
   'let text = buildImmersiveHeader(style, senderJid, count, botName);',
   'let text = buildImmersiveHeader(style, senderJid, count, botName, displayName);'
 );
+
+const overviewStart = src.indexOf('function buildCategoryOverview(');
+const overviewEnd = overviewStart < 0 ? -1 : src.indexOf('// Détail d\'une catégorie', overviewStart);
+if (overviewStart < 0 || overviewEnd < 0) throw new Error('[menu-ui] buildCategoryOverview introuvable');
+let overview = src.slice(overviewStart, overviewEnd);
+if (!overview.includes('return disciplineMenuText(text);')) {
+  overview = overview.replace(/return\s+text;\s*\}\s*$/, 'return disciplineMenuText(text);\n}\n\n');
+}
+src = src.slice(0, overviewStart) + overview + src.slice(overviewEnd);
+
 src = src.replace(
-  '  return text;\n}\n\n// Détail d\'une catégorie',
-  '  return disciplineMenuText(text);\n}\n\n// Détail d\'une catégorie'
+  /entry\.prefix,\s*entry\.categoryNames,\s*entry\.categories,\s*entry\.count,\s*entry\.senderJid\s*\n\s*\);/,
+  "entry.prefix, entry.categoryNames, entry.categories, entry.count, entry.senderJid, entry.displayName || ''\n    );"
 );
 
-// Navigation retour menu.
-src = src.replace(
-  'entry.prefix, entry.categoryNames, entry.categories, entry.count, entry.senderJid\n    );',
-  'entry.prefix, entry.categoryNames, entry.categories, entry.count, entry.senderJid, entry.displayName || \'\'\n    );'
-);
-
-// Exécution racine : pushName > infos extra > fallback numéro normalisé.
 if (!src.includes('[MENU REAL DISPLAY NAME]')) {
   const needle = '      const rawSender = extra.sender || msg.key.participant || msg.key.remoteJid;';
   if (!src.includes(needle)) throw new Error('[menu-ui] rawSender introuvable');
@@ -95,13 +93,16 @@ if (!src.includes('[MENU REAL DISPLAY NAME]')) {
 }
 
 src = src.replace(
-  'buildCategoryOverview(styleActif, botName, ownerName, userRank, prefix, categoryNames, categories, count, rawSender);',
+  /buildCategoryOverview\(styleActif,\s*botName,\s*ownerName,\s*userRank,\s*prefix,\s*categoryNames,\s*categories,\s*count,\s*rawSender\);/,
   'buildCategoryOverview(styleActif, botName, ownerName, userRank, prefix, categoryNames, categories, count, rawSender, displayName);'
 );
-src = src.replace(
-  'categoryNames, categories, count, senderJid: rawSender,\n          currentCategory:',
-  'categoryNames, categories, count, senderJid: rawSender, displayName,\n          currentCategory:'
-);
+
+if (!/senderJid:\s*rawSender,\s*displayName/.test(src)) {
+  src = src.replace(
+    /categoryNames,\s*categories,\s*count,\s*senderJid:\s*rawSender,\s*\n\s*currentCategory:/,
+    'categoryNames, categories, count, senderJid: rawSender, displayName,\n          currentCategory:'
+  );
+}
 
 fs.writeFileSync(menuPath, src, 'utf8');
 
@@ -111,8 +112,9 @@ for (const marker of [
   MARKER,
   '[DISPLAY NAME NO LID]',
   '[MENU REAL DISPLAY NAME]',
-  'disciplineMenuText(text)',
+  'return disciplineMenuText(text);',
   'entry.displayName',
+  'senderJid: rawSender, displayName',
 ]) {
   if (!final.includes(marker)) throw new Error('[menu-ui] garde-fou absent: ' + marker);
 }
