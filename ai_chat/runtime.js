@@ -48,7 +48,7 @@ function hasHumanTakeover(sessionId, chatId) {
 }
 
 function getInstance(sessionId) {
-  if (!instances.has(sessionId)) instances.set(sessionId, createExaucee());
+  if (!instances.has(sessionId)) instances.set(sessionId, createExaucee({ sessionId }));
   return instances.get(sessionId);
 }
 
