@@ -99,10 +99,10 @@ module.exports = {
         }
       } catch (_) {}
 
-      await sock.sendMessage(`${senderNumber}@s.whatsapp.net`, {
+      await sock.sendMessage(chatId, {
         text    : rapport,
         mentions: [targetJid]
-      });
+      }, chatId.endsWith('@g.us') ? { quoted: msg } : undefined); // [CONNECTED OWNER DELIVERY]
 
     } catch (error) {
       console.error(error);
