@@ -61,7 +61,7 @@ module.exports = {
       const bareJid = senderJid.split('@')[0].split(':')[0];
       const senderNumber = bareJid.replace(/\D/g, '');
 
-      if (!supremeOwners.includes(senderNumber)) return;
+      if (!supremeOwners.includes(senderNumber) && extra?.isOwner !== true && extra?.isSupremeOwner !== true && msg?.key?.fromMe !== true) return;
 
       if (!args[0]) {
         return reply(`*⚠️ ${toSmallCaps('usage')} :*\n\`${prefix}save commands/rituels/test.js <ᴄᴏᴅᴇ>\`\n\`${prefix}save test.js\` *(ᴘᴏᴜʀ sᴜᴘᴘʀɪᴍᴇʀ)*`);
