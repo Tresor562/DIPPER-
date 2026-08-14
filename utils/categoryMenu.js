@@ -1,5 +1,7 @@
 'use strict';
 
+const config = require('../config');
+const styleManager = require('./styleManager');
 const { loadCommands } = require('./commandLoader');
 
 const CATEGORY_ALIASES = new Map([
@@ -71,23 +73,23 @@ function normalize(value) {
     .trim();
 }
 
-function canonicalAliasMap() {
-  const map = new Map();
-  for (const [alias, category] of CATEGORY_ALIASES) map.set(normalize(alias), category);
-  return map;
-}
+const NORMALIZED_ALIASES = new Map(
+  Array.from(CATEGORY_ALIASES.entries()).map(([alias, category]) => [normalize(alias), category])
+);
 
-const NORMALIZED_ALIASES = canonicalAliasMap();
-
-function availableCategories() {
-  const result = new Set();
+function uniqueCommands() {
+  const out = [];
   const seen = new Set();
   for (const cmd of loadCommands().values()) {
     if (!cmd || seen.has(cmd)) continue;
     seen.add(cmd);
-    result.add(cmd.category || '🔮 ᴀᴜᴛʀᴇs');
+    out.push(cmd);
   }
-  return result;
+  return out;
+}
+
+function availableCategories() {
+  return new Set(uniqueCommands().map(cmd => cmd.category || '🔮 ᴀᴜᴛʀᴇs'));
 }
 
 function resolveCategory(label) {
@@ -105,22 +107,18 @@ function resolveCategory(label) {
 }
 
 function commandsForCategory(category) {
-  const commands = [];
-  const seen = new Set();
-  for (const cmd of loadCommands().values()) {
-    if (!cmd || seen.has(cmd) || cmd.category !== category) continue;
-    seen.add(cmd);
-    commands.push(cmd);
-  }
-  return commands.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return uniqueCommands()
+    .filter(cmd => cmd.category === category)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
-function buildCategoryText(category, commands) {
+function buildCategoryText(category, commands, prefix = config.prefix || '.') {
   const display = DISPLAY[category] || category;
-  let text = `╭── ${display} ──\n\n`;
-  for (const cmd of commands) text += `• ${cmd.name}\n`;
-  text += `\nTotal : ${commands.length} commandes\n`;
-  text += '\n>Powered by 🌹 𝐌ꝛ⥔𝕿𝖗𝖊𝖘𝖔𝖗 🌹';
+  let text = `╭─❑ *${String(display).toUpperCase()}* ❑─⚯\n`;
+  for (const cmd of commands) text += `┃⌥⎋ \`${prefix}${cmd.name}\`\n`;
+  text += '╰━━━━━━━━━━━━━━━⚯\n\n';
+  text += `📜 *${commands.length} commandes dans cette catégorie*\n\n`;
+  text += '> 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑';
   return text;
 }
 
@@ -129,6 +127,22 @@ function extractRequestedCategory(body, prefix = '.') {
   if (prefix && input.startsWith(prefix)) input = input.slice(prefix.length).trim();
   const match = input.match(/^(.+?)\s+menu$/i);
   return match ? match[1].trim() : null;
+}
+
+function getSenderJid(msg) {
+  return msg?.key?.participant || msg?.key?.remoteJid || '';
+}
+
+function getNewsletterContext() {
+  return {
+    forwardingScore: 1,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+      newsletterJid: config.newsletterJid || '120363411005383995@newsletter',
+      newsletterName: config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑',
+      serverMessageId: -1,
+    },
+  };
 }
 
 async function handleCategoryMenuPhrase(sock, msg, context, body, prefix) {
@@ -142,7 +156,45 @@ async function handleCategoryMenuPhrase(sock, msg, context, body, prefix) {
   const from = context?.from || msg?.key?.remoteJid;
   if (!from) return false;
 
-  await sock.sendMessage(from, { text: buildCategoryText(category, commands) }, { quoted: msg });
+  const activePrefix = config.prefix || prefix || '.';
+  const style = Number(styleManager.getStyle?.() ?? 0);
+  const senderJid = getSenderJid(msg);
+  const allCount = uniqueCommands().length;
+  const menu = require('../commands/general_tools/menu');
+
+  let text;
+  if (typeof menu.buildCategoryDetail === 'function') {
+    text = menu.buildCategoryDetail(style, category, commands, 1, {
+      botName: config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑',
+      ownerName: 'Trésor',
+      userRank: 'utilisateur',
+      prefix: activePrefix,
+      count: allCount,
+      senderJid,
+      currentCategory: category,
+    });
+  } else {
+    text = buildCategoryText(category, commands, activePrefix);
+  }
+
+  // [CATEGORY MENU INTERACTIVE]
+  // Même moteur que .menu : effet newsletter + CTA chaîne + style actif.
+  if (typeof menu.sendStyledMenuMessage === 'function') {
+    await menu.sendStyledMenuMessage(sock, from, {
+      text,
+      style,
+      quoted: msg,
+      mentions: senderJid ? [senderJid] : [],
+      withImage: true,
+    });
+    return true;
+  }
+
+  await sock.sendMessage(
+    from,
+    { text, contextInfo: getNewsletterContext() },
+    { quoted: msg }
+  );
   return true;
 }
 
