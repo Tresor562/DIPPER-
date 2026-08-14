@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { routeMessage } = require('../ai_chat/router/socialRouter');
 const { assertPermission, redact } = require('../ai_chat/security/policy');
 const { GameRegistry, quizEngine } = require('../ai_chat/games/registry');
+const { CommandBridge } = require('../ai_chat/tools/commandBridge');
 
 function msg({ text = '', chat = '1@g.us', fromMe = false, quotedId = null } = {}) {
   return {
@@ -53,4 +54,23 @@ test('GameRegistry crée un quiz depuis un template', () => {
   const session = games.create('anime', { gameId: 'g1' });
   assert.equal(session.rules.rounds, 20);
   assert.equal(session.status, 'lobby');
+});
+
+test('CommandBridge propage les permissions existantes sans les contourner', async () => {
+  let receivedExtra = null;
+  const commands = new Map([['sample', {
+    name: 'sample',
+    adminOnly: true,
+    async execute(_sock, _msg, _args, extra) { receivedExtra = extra; return 'ok'; }
+  }]]);
+  const bridge = new CommandBridge({ commands });
+  const result = await bridge.execute('sample', {
+    msg: msg(),
+    actor: { isOwner: true },
+    extra: { marker: 1 }
+  });
+  assert.equal(result, 'ok');
+  assert.equal(receivedExtra.marker, 1);
+  assert.equal(receivedExtra.isOwner, true);
+  assert.equal(receivedExtra.isAdmin, true);
 });
