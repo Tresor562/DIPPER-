@@ -17,9 +17,10 @@ const SUPPORT_GROUP_URL = 'https://chat.whatsapp.com/Dm7yX11U7vmCCFM240sNKq?s=cl
 
 const SPECIAL_COMMANDS = new Set([
   'menu', 'grimoire', 'allmenu', 'commands', 'index', 'menu2', 'help',
-  'ping', 'alive', 'uptime', 'botinfo', 'info', 'status',
-  'repere', 'repère', 'owner', 'support', 'freebot', 'about',
-  'pair', 'sessions', 'session', 'setprefix', 'setmode',
+  'ping', 'alive', 'uptime', 'botinfo', 'botstatus', 'info', 'status', 'presence',
+  'repere', 'repère', 'owner', 'support', 'freebot', 'about', 'channelid',
+  'pair', 'sessions', 'session', 'mode', 'prefix', 'setprefix', 'setmode',
+  'setbotname', 'setmenuimage', 'setnewsletter', 'update',
 ]);
 
 function normalizeCommandName(name) {
