@@ -2,6 +2,21 @@
 
 const DEFAULT_TTL_MS = 4 * 60 * 1000;
 
+function normalize(text = '') {
+  return String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function looksLikeFollowup(text = '') {
+  const raw = String(text || '').trim();
+  const t = normalize(raw);
+  if (!t || raw.length > 320) return false;
+  if (/^(oui|non|ok|okay|d'accord|vas[- ]y|continue|encore|pourquoi|comment|et pourquoi|et comment|le premier|le deuxieme|le 1|le 2|celui[- ]la|celle[- ]la|lui|elle|eux|elles|ca|ça|fais[- ]le|fais ca|exact|exactement|ah bon|serieux|vraiment)\b/.test(t)) return true;
+  if (/^(et|mais|donc|du coup|alors|sinon)\b/.test(t)) return true;
+  if (/\?$/.test(raw) && raw.split(/\s+/).length <= 28) return true;
+  if (raw.split(/\s+/).length <= 8 && /\b(il|elle|lui|eux|elles|ca|ça|cela|celui|celle|premier|deuxieme|ensuite|apres)\b/.test(t)) return true;
+  return false;
+}
+
 class ConversationThreads {
   constructor({ ttlMs = DEFAULT_TTL_MS, max = 2000 } = {}) {
     this.ttlMs = Math.max(30000, Number(ttlMs) || DEFAULT_TTL_MS);
@@ -44,4 +59,4 @@ class ConversationThreads {
   }
 }
 
-module.exports = { ConversationThreads, DEFAULT_TTL_MS };
+module.exports = { ConversationThreads, DEFAULT_TTL_MS, looksLikeFollowup };
