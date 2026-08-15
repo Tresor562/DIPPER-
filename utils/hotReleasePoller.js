@@ -95,7 +95,7 @@ function isPermanentReleaseError(error) {
     || /HOT_(PATH|SOURCE|BATCH|ACTION|DUPLICATE|COLLISION|EMPTY|SYNTAX|MODULE|RUNTIME_LOAD)/.test(code);
 }
 
-async function pollOnce({ db, commandMap } = {}) {
+async function pollOnce({ db, commandMap, commandsRoot } = {}) {
   if (!db) throw new Error('MongoDB requis pour le poller HOT.');
   const manifest = await fetchManifest();
   if (!manifest || manifest.active === false) return { status: 'idle' };
@@ -120,6 +120,7 @@ async function pollOnce({ db, commandMap } = {}) {
     const result = await enqueueBatch(payload.updates, {
       db,
       commandMap,
+      commandsRoot,
       commitSha: payload.commitSha,
       actor: 'encrypted-public-wrapper',
     });
@@ -150,7 +151,7 @@ async function pollOnce({ db, commandMap } = {}) {
   }
 }
 
-async function startHotReleasePoller({ db, commandMap } = {}) {
+async function startHotReleasePoller({ db, commandMap, commandsRoot } = {}) {
   if (started) return { started: false, reason: 'already-started' };
   if (!db) return { started: false, reason: 'no-db' };
   started = true;
@@ -167,7 +168,7 @@ async function startHotReleasePoller({ db, commandMap } = {}) {
   const run = async () => {
     if (pollRunning) return;
     pollRunning = true;
-    try { await pollOnce({ db, commandMap }); }
+    try { await pollOnce({ db, commandMap, commandsRoot }); }
     catch (error) {
       if (String(error?.code || '') === 'HOT_RELEASE_FETCH_FAILED') {
         console.warn('[hot-release] GitHub temporairement indisponible:', error.message);
