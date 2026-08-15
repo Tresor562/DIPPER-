@@ -3,7 +3,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-const UA = 'Mozilla/5.0 (compatible; ExauceeResearch/1.0; +https://github.com/Tresor562/DIPPER-)';
+const UA = 'Mozilla/5.0 (compatible; ExauceeResearch/1.1; +https://github.com/Tresor562/DIPPER-)';
 const DEFAULT_TIMEOUT = 9000;
 
 function normalize(text = '') {
@@ -17,6 +17,11 @@ function stripTracking(url = '') {
     u.hash = '';
     return u.toString();
   } catch (_) { return String(url || ''); }
+}
+
+function extractUrl(text = '') {
+  const match = String(text).match(/https?:\/\/[^\s<>"')\]]+/i);
+  return match ? stripTracking(match[0].replace(/[.,!?;:]+$/, '')) : null;
 }
 
 function words(text = '') {
@@ -41,6 +46,16 @@ function safeUrl(raw = '') {
   } catch (_) { return null; }
 }
 
+function sentenceFallback(report) {
+  const rows = (report?.results || []).slice(0, 5);
+  if (!rows.length) return "Je n’ai trouvé aucune source exploitable pour cette recherche.";
+  const bullets = rows.map((r, i) => {
+    const snippet = String(r.snippet || r.content || '').replace(/\s+/g, ' ').trim().slice(0, 340);
+    return `${i + 1}. ${r.title}${snippet ? ` — ${snippet}` : ''}`;
+  });
+  return `Voilà ce que j’ai pu recouper rapidement :\n\n${bullets.join('\n\n')}`;
+}
+
 class ResearchEngine {
   constructor({ timeout = DEFAULT_TIMEOUT, cacheTtlMs = 10 * 60 * 1000, maxResults = 8 } = {}) {
     this.timeout = timeout;
@@ -52,7 +67,7 @@ class ResearchEngine {
 
   needsResearch(text = '') {
     const t = normalize(text);
-    return /\b(cherche|recherche|verifie|trouve|sources?|actualite|aujourd'hui|maintenant|recent|derniere?s?|nouvelle?s?|prix|score|classement|meteo|qui est actuellement|en ce moment)\b/.test(t);
+    return Boolean(extractUrl(text)) || /\b(cherche|recherche|verifie|trouve|sources?|actualite|aujourd'hui|maintenant|recent|derniere?s?|nouvelle?s?|prix|score|classement|meteo|qui est actuellement|en ce moment|lis ce lien|analyse ce lien|resume ce lien)\b/.test(t);
   }
 
   async searchDuckDuckGo(query) {
@@ -94,11 +109,28 @@ class ResearchEngine {
     if (!/html|text\//i.test(type)) return '';
     const $ = cheerio.load(data);
     $('script,style,noscript,nav,footer,header,form,svg,canvas').remove();
+    const title = $('title').first().text().replace(/\s+/g, ' ').trim();
     const root = $('article').first().length ? $('article').first() : $('main').first().length ? $('main').first() : $('body');
-    return root.text().replace(/\s+/g, ' ').trim().slice(0, 12000);
+    const text = root.text().replace(/\s+/g, ' ').trim().slice(0, 16000);
+    return { title, text };
+  }
+
+  async researchUrl(url) {
+    const safe = safeUrl(url);
+    if (!safe) throw new Error('URL non autorisée');
+    const page = await this.fetchPage(safe);
+    return {
+      query: safe,
+      searchedAt: Date.now(),
+      directUrl: true,
+      results: [{ title: page.title || safe, url: safe, snippet: page.text.slice(0, 500), content: page.text, source: 'direct-url', relevance: 1 }]
+    };
   }
 
   async research(query, { lang = 'fr', deep = true } = {}) {
+    const direct = extractUrl(query);
+    if (direct) return this.researchUrl(direct);
+
     const key = `${lang}:${normalize(query)}:${deep ? 1 : 0}`;
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return structuredClone(cached.value);
@@ -123,8 +155,11 @@ class ResearchEngine {
 
     if (deep) {
       await Promise.all(selected.slice(0, 4).map(async item => {
-        try { item.content = await this.fetchPage(item.url); }
-        catch (_) { item.content = ''; }
+        try {
+          const page = await this.fetchPage(item.url);
+          item.content = page.text;
+          if (!item.title && page.title) item.title = page.title;
+        } catch (_) { item.content = ''; }
       }));
     }
 
@@ -141,6 +176,14 @@ class ResearchEngine {
     });
     return rows.join('\n\n');
   }
+
+  sourceFooter(report, max = 5) {
+    const rows = (report?.results || []).slice(0, max);
+    if (!rows.length) return '';
+    return `Sources consultées :\n${rows.map((r, i) => `${i + 1}. ${r.title} — ${r.url}`).join('\n')}`;
+  }
+
+  fallbackSummary(report) { return sentenceFallback(report); }
 }
 
-module.exports = { ResearchEngine, safeUrl, relevance, stripTracking };
+module.exports = { ResearchEngine, safeUrl, relevance, stripTracking, extractUrl, sentenceFallback };
