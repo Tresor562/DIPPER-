@@ -48,3 +48,25 @@ for (const file of [serverPath, path.join(ROOT, 'utils', 'hotOidcAuth.js')]) {
   const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
   if (check.status !== 0) throw new Error(`[install-hot-oidc] syntaxe ${path.relative(ROOT, file)}: ${check.stderr || check.stdout}`);
 }
+
+// IMPORTANT DÉPLOIEMENT : quand le wrapper appelle cet installateur depuis son
+// postinstall, on valide toute la chaîne Exaucée AVANT que Render ne remplace
+// l'instance active. Au vrai `npm start`, npm_lifecycle_event vaut `prestart` :
+// on ne refait donc pas cette prévalidation lourde.
+const lifecycleEvent = String(process.env.npm_lifecycle_event || '').toLowerCase();
+if (process.env.EXAUCEE_BUILD_PREFLIGHT !== '1' && lifecycleEvent !== 'prestart') {
+  const preflight = spawnSync(process.execPath, ['scripts/verify-exaucee-prestart-build.js'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, EXAUCEE_BUILD_PREFLIGHT: '1' },
+    timeout: 300_000,
+  });
+  if (preflight.stdout) process.stdout.write(preflight.stdout);
+  if (preflight.stderr) process.stderr.write(preflight.stderr);
+  if (preflight.error) {
+    throw new Error(`[install-hot-oidc] préflight Exaucée interrompu: ${preflight.error.message}`);
+  }
+  if (preflight.status !== 0) {
+    throw new Error(`[install-hot-oidc] préflight Exaucée échoué (code ${preflight.status}).`);
+  }
+}
