@@ -6,6 +6,7 @@ const { LocalBrain } = require('./localBrain');
 const { LocalModelRunner } = require('./localModelRunner');
 
 const MODE = Object.freeze({ FAST:'fast', NORMAL:'normal', DEEP:'deep', AGENT:'agent', DUAL:'dual', CRITICAL:'critical' });
+const SENSITIVE_RE = /(api[_ -]?key|token|secret|password|mot de passe|credential|cookie|authorization|session(?:id| key| token)?|bearer\s+[a-z0-9._~+\/-]+=*)/i;
 
 function normalize(text='') {
   return String(text).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -27,7 +28,7 @@ function inferMode(messages=[], requested) {
   return MODE.NORMAL;
 }
 
-function cleanMessages(messages=[], maxChars=70000) {
+function cleanMessages(messages=[], maxChars=90000) {
   const rows = (messages || []).map(m => ({ role: ['system','assistant','user'].includes(m.role) ? m.role : 'user', content: String(m.content || '') }));
   let total = 0;
   const kept = [];
@@ -39,6 +40,16 @@ function cleanMessages(messages=[], maxChars=70000) {
     if (total >= maxChars) break;
   }
   return kept;
+}
+
+function hashString(text='') {
+  let h = 2166136261;
+  for (const ch of String(text)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+
+function containsSensitive(messages=[]) {
+  return (messages || []).some(m => SENSITIVE_RE.test(String(m?.content || '')));
 }
 
 class ZeroCostRouter {
@@ -65,28 +76,28 @@ class ZeroCostRouter {
     const prev = this.health.get(name) || { failures:0 };
     const failures = prev.failures + 1;
     const status = Number(error?.response?.status || 0);
-    const rate = status === 429;
-    const cooldown = rate ? 90_000 : failures >= 3 ? 30_000 : 5_000;
+    const cooldown = status === 429 ? 90_000 : failures >= 3 ? 30_000 : 5_000;
     this.health.set(name, { failures, cooldownUntil:Date.now()+cooldown, lastError:String(error?.message||error).slice(0,180) });
   }
 
   providerStatus() {
     return {
-      policy: { maxCostPerRequest:0, maxDailyCost:0, allowPaidProviders:false },
+      policy: { maxCostPerRequest:0, maxDailyCost:0, allowPaidProviders:false, paidFallback:false },
       providers: {
         groq: { configured:Boolean(this.config.groqKey), model:this.config.groqModel || 'openai/gpt-oss-120b', healthy:this._available('groq') },
         gemini: { configured:Boolean(this.config.geminiKey), model:this.config.geminiModel || 'gemini-2.5-flash', healthy:this._available('gemini') },
         openrouter: { configured:Boolean(this.config.openRouterKey), model:'openrouter/free', healthy:this._available('openrouter') },
-        pollinations: { configured:true, model:'openai', healthy:this._available('pollinations') },
+        pollinations: { configured:Boolean(this.pollinationsKey), model:'openai', healthy:this._available('pollinations'), optional:true },
         local: { configured:this.localModel.available(), healthy:true }
       }
     };
   }
 
   _cacheKey(messages, mode) {
-    const text = normalize(lastUserText(messages));
-    if (!text || text.length > 500 || mode === MODE.AGENT || mode === MODE.CRITICAL) return '';
-    return `${mode}:${text}`;
+    if (mode === MODE.AGENT || mode === MODE.CRITICAL) return '';
+    const recent = messages.slice(-8).map(m => `${m.role}:${normalize(m.content).slice(0,1500)}`).join('|');
+    if (!recent) return '';
+    return `${mode}:${hashString(recent)}`;
   }
 
   _getCached(key) {
@@ -96,42 +107,40 @@ class ZeroCostRouter {
   }
 
   _putCached(key, value) {
-    if (!key || !value?.text) return;
-    this.cache.set(key, { expiresAt:Date.now()+10*60*1000, value });
+    if (!key || !value?.text || value.degraded) return;
+    this.cache.set(key, { expiresAt:Date.now()+8*60*1000, value });
     if (this.cache.size > 300) this.cache.delete(this.cache.keys().next().value);
   }
 
   async complete({ messages, mode } = {}) {
     messages = cleanMessages(messages || []);
     const selectedMode = inferMode(messages, mode);
-    const cacheKey = this._cacheKey(messages, selectedMode);
+    const sensitive = containsSensitive(messages);
+    const cacheKey = sensitive ? '' : this._cacheKey(messages, selectedMode);
     const cached = this._getCached(cacheKey);
     if (cached) return { ...cached, mode:selectedMode };
 
-    // Un vrai modèle local génératif reste le meilleur socle sans dépendance réseau.
-    if (this.localModel.available() && selectedMode !== MODE.DUAL) {
-      try {
-        const result = await this.localModel.complete(messages, { mode:selectedMode });
-        if (result?.text?.trim()) return { ...result, mode:selectedMode };
-      } catch (err) { this._failure('local', err); }
+    // Si le contexte contient un secret, aucune donnée ne quitte la machine.
+    if (sensitive) {
+      if (this.localModel.available()) {
+        try {
+          const result = await this.localModel.complete(messages, { mode:selectedMode });
+          if (result?.text?.trim()) return { ...result, mode:selectedMode, privacy:'local-only' };
+        } catch (err) { this._failure('local', err); }
+      }
+      const fallback = this.localBrain.fallback(messages);
+      return { ...fallback, provider:'exaucee-local-private-fallback', mode:selectedMode, degraded:true, privacy:'local-only' };
     }
 
-    // FAST peut utiliser une réponse locale uniquement pour les salutations très simples.
-    if (selectedMode === MODE.FAST) {
-      const local = this.localBrain.answer(messages);
-      if (local?.text && Number(local.confidence || 0) >= 0.97) return { provider:'exaucee-local-fast', text:local.text, mode:selectedMode };
-    }
-
-    // Les providers les plus capables passent AVANT les règles locales.
+    // Les vrais LLM cloud configurés passent avant les règles et avant un petit modèle local.
     if ([MODE.DUAL, MODE.CRITICAL].includes(selectedMode)) {
       const dual = await this._dual(messages, selectedMode).catch(() => null);
       if (dual?.text?.trim()) { this._putCached(cacheKey, dual); return dual; }
     }
 
-    const order = this._providerOrder(selectedMode);
     const errors = [];
-    for (const name of order) {
-      if (!this._available(name)) continue;
+    for (const name of this._providerOrder(selectedMode)) {
+      if (!this._providerConfigured(name) || !this._available(name)) continue;
       try {
         const result = await this._call(name, messages, selectedMode);
         if (result?.text?.trim()) {
@@ -146,17 +155,36 @@ class ZeroCostRouter {
       }
     }
 
-    // Dernier recours: règles locales. Elles ne remplacent plus un LLM quand un LLM fonctionne.
+    // Vrai modèle local génératif seulement après les LLM cloud, pour privilégier la qualité.
+    if (this.localModel.available()) {
+      try {
+        const result = await this.localModel.complete(messages, { mode:selectedMode });
+        if (result?.text?.trim()) return { ...result, mode:selectedMode };
+      } catch (err) { this._failure('local', err); errors.push(`local:${String(err?.message||err).slice(0,100)}`); }
+    }
+
+    // FAST peut encore répondre localement à une salutation triviale.
+    if (selectedMode === MODE.FAST) {
+      const local = this.localBrain.answer(messages);
+      if (local?.text && Number(local.confidence || 0) >= 0.97) return { provider:'exaucee-local-fast', text:local.text, mode:selectedMode };
+    }
+
     const fallback = this.localBrain.fallback(messages);
-    console.warn(`[Exaucée/AI] ${selectedMode} — providers indisponibles: ${errors.join(' | ')}`);
+    console.warn(`[Exaucée/AI] ${selectedMode} — aucun LLM utilisable: ${errors.join(' | ')}`);
     return { ...fallback, provider:fallback.provider || 'exaucee-local-fallback', mode:selectedMode, degraded:true };
   }
 
+  _providerConfigured(name) {
+    if (name === 'groq') return Boolean(this.config.groqKey);
+    if (name === 'gemini') return Boolean(this.config.geminiKey);
+    if (name === 'openrouter') return Boolean(this.config.openRouterKey);
+    if (name === 'pollinations') return Boolean(this.pollinationsKey);
+    return false;
+  }
+
   _providerOrder(mode) {
-    // Groq GPT-OSS pour raisonnement, Gemini pour contexte général, OpenRouter free comme diversification,
-    // Pollinations reste un secours sans clé.
-    if (mode === MODE.DEEP || mode === MODE.AGENT || mode === MODE.CRITICAL) return ['groq','gemini','openrouter','pollinations'];
-    return ['gemini','groq','openrouter','pollinations'];
+    if (mode === MODE.DEEP || mode === MODE.AGENT || mode === MODE.CRITICAL) return ['groq','gemini','openrouter'];
+    return ['gemini','groq','openrouter'];
   }
 
   async _call(name, messages, mode) {
@@ -180,7 +208,7 @@ class ZeroCostRouter {
 
     const synthesisMessages = [
       ...messages,
-      { role:'system', content:'Tu es le vérificateur final d’Exaucée. Deux analyses indépendantes suivent. Produis UNE réponse finale naturelle, exacte et utile. Résous les contradictions, ne mentionne pas les fournisseurs, ne révèle aucun raisonnement interne et ne prétends pas avoir vérifié un fait absent des deux analyses.' },
+      { role:'system', content:'Tu es le vérificateur final d’Exaucée. Deux analyses indépendantes suivent. Produis UNE réponse finale naturelle, exacte et utile. Résous les contradictions. Ne mentionne pas les fournisseurs. Ne révèle aucun raisonnement interne. Si les deux analyses ne suffisent pas à établir un fait, indique l’incertitude au lieu de l’inventer.' },
       { role:'user', content:`Analyse A:\n${good[0].text}\n\nAnalyse B:\n${good[1].text}` }
     ];
     try {
@@ -193,42 +221,87 @@ class ZeroCostRouter {
 
   _maxTokens(mode) {
     if (mode === MODE.FAST) return 500;
-    if (mode === MODE.NORMAL) return 1400;
-    if (mode === MODE.DEEP || mode === MODE.DUAL) return 2800;
-    return 3200;
+    if (mode === MODE.NORMAL) return 1600;
+    if (mode === MODE.DEEP || mode === MODE.DUAL) return 3200;
+    return 3600;
   }
 
   async _groq(messages, mode) {
     if (!this.config.groqKey) throw new Error('groq key unavailable');
-    const model = this.config.groqModel || 'openai/gpt-oss-120b';
-    const body = { model, messages, max_tokens:this._maxTokens(mode), temperature: mode === MODE.FAST ? 0.75 : 0.45 };
-    if ([MODE.DEEP,MODE.DUAL,MODE.CRITICAL].includes(mode) && /gpt-oss/i.test(model)) body.reasoning_effort = mode === MODE.CRITICAL ? 'high' : 'medium';
+    const preferred = this.config.groqModel || 'openai/gpt-oss-120b';
+    const models = [...new Set([
+      preferred,
+      mode === MODE.FAST ? 'llama-3.1-8b-instant' : 'openai/gpt-oss-120b',
+      'qwen/qwen3.6-27b',
+      'llama-3.3-70b-versatile',
+      'openai/gpt-oss-20b'
+    ])];
+    let lastError;
+    for (const model of models) {
+      try { return await this._groqOne(model, messages, mode); }
+      catch (err) {
+        lastError = err;
+        const status = Number(err?.response?.status || 0);
+        if (![400,404,429,500,502,503,504].includes(status)) throw err;
+      }
+    }
+    throw lastError || new Error('groq unavailable');
+  }
+
+  async _groqOne(model, messages, mode) {
+    const body = {
+      model,
+      messages,
+      max_tokens:this._maxTokens(mode),
+      temperature:mode === MODE.FAST ? 0.75 : 0.45
+    };
+    if ([MODE.DEEP,MODE.DUAL,MODE.CRITICAL].includes(mode) && /gpt-oss/i.test(model)) {
+      body.reasoning_effort = mode === MODE.CRITICAL ? 'high' : 'medium';
+      body.include_reasoning = false;
+    }
     const res = await this.http.post('https://api.groq.com/openai/v1/chat/completions', body, {
       headers:{ Authorization:`Bearer ${this.config.groqKey}`, 'Content-Type':'application/json' }
     });
     const text = res.data?.choices?.[0]?.message?.content || '';
-    if (!String(text).trim()) throw new Error('groq empty response');
+    if (!String(text).trim()) throw new Error(`groq empty response: ${model}`);
     return { provider:`groq:${model}`, text:String(text).trim() };
   }
 
   async _gemini(messages, mode) {
     if (!this.config.geminiKey) throw new Error('gemini key unavailable');
-    const model = this.config.geminiModel || 'gemini-2.5-flash';
+    const preferred = this.config.geminiModel || 'gemini-2.5-flash';
+    const models = [...new Set([preferred, 'gemini-2.5-flash', 'gemini-2.5-flash-lite'])];
+    let lastError;
+    for (const model of models) {
+      try { return await this._geminiOne(model, messages, mode); }
+      catch (err) {
+        lastError = err;
+        const status = Number(err?.response?.status || 0);
+        if (![400,404,429,500,502,503,504].includes(status)) throw err;
+      }
+    }
+    throw lastError || new Error('gemini unavailable');
+  }
+
+  async _geminiOne(model, messages, mode) {
     const systems = messages.filter(m=>m.role==='system').map(m=>m.content).join('\n\n');
     const contents = messages.filter(m=>m.role!=='system').map(m => ({
       role:m.role === 'assistant' ? 'model' : 'user',
       parts:[{ text:String(m.content||'') }]
     }));
     const generationConfig = { maxOutputTokens:this._maxTokens(mode), temperature:mode===MODE.FAST?0.8:0.5 };
-    if ([MODE.DEEP,MODE.DUAL,MODE.CRITICAL].includes(mode)) generationConfig.thinkingConfig = { thinkingBudget: mode===MODE.CRITICAL ? 4096 : 2048 };
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.config.geminiKey)}`;
+    if ([MODE.DEEP,MODE.DUAL,MODE.CRITICAL].includes(mode) && /gemini-2\.5-/i.test(model)) {
+      generationConfig.thinkingConfig = { thinkingBudget: mode===MODE.CRITICAL ? 4096 : 2048, includeThoughts:false };
+    }
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     const res = await this.http.post(url, {
       systemInstruction: systems ? { parts:[{ text:systems }] } : undefined,
       contents,
       generationConfig
-    }, { headers:{ 'Content-Type':'application/json' } });
-    const text = res.data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('') || '';
-    if (!String(text).trim()) throw new Error('gemini empty response');
+    }, { headers:{ 'Content-Type':'application/json', 'x-goog-api-key':this.config.geminiKey } });
+    const parts = res.data?.candidates?.[0]?.content?.parts || [];
+    const text = parts.filter(p=>!p.thought).map(p=>p.text||'').join('');
+    if (!String(text).trim()) throw new Error(`gemini empty response: ${model}`);
     return { provider:`gemini:${model}`, text:String(text).trim() };
   }
 
@@ -244,29 +317,15 @@ class ZeroCostRouter {
     return { provider:`openrouter-free:${res.data?.model || 'auto'}`, text:String(text).trim() };
   }
 
-  _flattenPrompt(messages) {
-    return messages.map(m => `${String(m.role||'user').toUpperCase()}: ${String(m.content||'')}`).join('\n\n').slice(0,30000);
-  }
-
   async _pollinations(messages, mode) {
-    const prompt = this._flattenPrompt(messages);
-    if (this.pollinationsKey) {
-      try {
-        const res = await this.http.post('https://gen.pollinations.ai/v1/chat/completions', {
-          model:'openai', messages, temperature:mode===MODE.FAST?0.8:0.5, max_tokens:this._maxTokens(mode), stream:false
-        }, { headers:{ Authorization:`Bearer ${this.pollinationsKey}`, 'Content-Type':'application/json' } });
-        const text = res.data?.choices?.[0]?.message?.content || '';
-        if (String(text).trim()) return { provider:'pollinations-chat', text:String(text).trim() };
-      } catch (_) {}
-    }
-    const res = await this.http.get(`https://gen.pollinations.ai/text/${encodeURIComponent(prompt)}`, {
-      params:{ model:'openai' }, responseType:'text', transformResponse:[x=>x], timeout:22000,
-      headers:{ 'User-Agent':'THE-BIG-DIPPER-Exaucee/4.0' }
-    });
-    const text = typeof res.data === 'string' ? res.data : res.data?.text || '';
+    if (!this.pollinationsKey) throw new Error('pollinations key unavailable');
+    const res = await this.http.post('https://gen.pollinations.ai/v1/chat/completions', {
+      model:'openai', messages, temperature:mode===MODE.FAST?0.8:0.5, max_tokens:this._maxTokens(mode), stream:false
+    }, { headers:{ Authorization:`Bearer ${this.pollinationsKey}`, 'Content-Type':'application/json' } });
+    const text = res.data?.choices?.[0]?.message?.content || '';
     if (!String(text).trim()) throw new Error('pollinations empty response');
-    return { provider:'pollinations-anonymous', text:String(text).trim() };
+    return { provider:'pollinations-chat', text:String(text).trim() };
   }
 }
 
-module.exports = { ZeroCostRouter, MODE, inferMode, cleanMessages };
+module.exports = { ZeroCostRouter, MODE, inferMode, cleanMessages, containsSensitive };
