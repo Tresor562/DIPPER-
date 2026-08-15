@@ -34,8 +34,8 @@ if (source.includes(marker)) {
   if (statusCount !== 1) throw new Error(`[install-hot-oidc] bloc status attendu 1 fois, trouvé ${statusCount}`);
   source = source.replace(oldStatusAuth, newStatusAuth);
 
-  const oldErrorMap = `  if (code === 'HOT_NO_MONGODB') return 503;\n  if (/SYNTAX|MODULE|RUNTIME_LOAD/.test(code)) return 422;`;
-  const newErrorMap = `  if (code === 'HOT_NO_MONGODB') return 503;\n  if (/UNAUTHORIZED|OIDC/.test(code)) return code === 'HOT_OIDC_JWKS_FAILED' ? 503 : 401;\n  if (/SYNTAX|MODULE|RUNTIME_LOAD/.test(code)) return 422;`;
+  const oldErrorMap = `  if (code === 'HOT_NO_MONGODB' || code === 'HOT_PERSIST_FAILED') return 503;\n  if (code === 'HOT_MANIFEST_CONFLICT') return 409;\n  if (/SYNTAX|MODULE|RUNTIME_LOAD/.test(code)) return 422;`;
+  const newErrorMap = `  if (code === 'HOT_NO_MONGODB' || code === 'HOT_PERSIST_FAILED') return 503;\n  if (code === 'HOT_MANIFEST_CONFLICT') return 409;\n  if (/UNAUTHORIZED|OIDC/.test(code)) return code === 'HOT_OIDC_JWKS_FAILED' ? 503 : 401;\n  if (/SYNTAX|MODULE|RUNTIME_LOAD/.test(code)) return 422;`;
   const mapCount = source.split(oldErrorMap).length - 1;
   if (mapCount !== 1) throw new Error(`[install-hot-oidc] map erreurs attendu 1 fois, trouvé ${mapCount}`);
   source = source.replace(oldErrorMap, newErrorMap);
