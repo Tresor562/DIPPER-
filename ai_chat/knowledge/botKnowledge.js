@@ -84,6 +84,28 @@ class BotKnowledge {
     return lines.join('\n\n');
   }
 
+  answer(text,{sessionId='default',groupId=null}={}){
+    if(!this.isBotQuestion(text))return null;
+    const t=norm(text); const snap=this.refresh();
+    const exactToken=(String(text).match(/[.!/]([a-z0-9_-]{2,40})/i)||[])[1];
+    const exact=exactToken?this.describe(exactToken):null;
+    if(exact){
+      const restrictions=[exact.ownerOnly?'owner uniquement':null,exact.adminOnly?'admin':null,exact.groupOnly?'groupe uniquement':null,exact.privateOnly?'privé uniquement':null,exact.botAdmin?'bot admin requis':null].filter(Boolean);
+      return `.${exact.name}${exact.aliases.length?` — alias: ${exact.aliases.join(', ')}`:''}\n${exact.description||'Aucune description fournie dans le registre.'}${exact.usage?`\nUsage: ${exact.usage}`:''}\nCatégorie: ${exact.category}.${restrictions.length?`\nRestrictions: ${restrictions.join(', ')}.`:''}`;
+    }
+    if(/\b(combien|nombre)\b.*\bcommande/.test(t))return `THE BIG DIPPER a actuellement ${snap.stats.total} commandes statiques chargées dans son registre.`;
+    if(/\b(categorie|categories)\b/.test(t))return `Catégories actuellement détectées: ${Object.entries(snap.stats.byCategory).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k} (${v})`).join(', ')||'aucune'}.`;
+    if(/\b(owner)\b.*\bcommande|\bcommandes?\b.*\bowner/.test(t)){
+      const names=snap.items.filter(x=>x.ownerOnly).slice(0,40).map(x=>'.'+x.name);
+      return names.length?`Commandes marquées owner dans le registre: ${names.join(', ')}.`:`Je ne vois actuellement aucune commande explicitement marquée owner dans les métadonnées chargées.`;
+    }
+    const hits=this.search(text,{limit:6});
+    if(hits.length){
+      return `Les commandes les plus proches dans le registre sont:\n${hits.map(c=>`• .${c.name}${c.description?` — ${c.description}`:''}`).join('\n')}`;
+    }
+    return null;
+  }
+
   describe(name){
     const q=norm(name).replace(/^[.!/]/,'');
     const cmd=this.refresh().items.find(c=>norm(c.name)===q||c.aliases.some(a=>norm(a)===q));
