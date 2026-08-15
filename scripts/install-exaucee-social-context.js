@@ -8,6 +8,7 @@ const ROOT = path.join(__dirname, '..');
 const runtimePath = path.join(ROOT, 'ai_chat', 'runtime.js');
 const cognitionPath = path.join(ROOT, 'ai_chat', 'cognition', 'cognitiveEngine.js');
 const MARKER = '[EXAUCEE SOCIAL CONTEXT V1]';
+const THREAD_MARKER = '[EXAUCEE CONVERSATION THREADS V1]';
 
 function replaceOnce(source, from, to, label) {
   if (!source.includes(from)) throw new Error(`[exaucee-social] ancre introuvable: ${label}`);
@@ -28,7 +29,11 @@ fs.writeFileSync(cognitionPath, cognition, 'utf8');
 let runtime = fs.readFileSync(runtimePath, 'utf8');
 if (!runtime.includes("require('./cognition/socialContext')")) {
   const importAnchor = "const { createExaucee } = require('./core');";
-  runtime = replaceOnce(runtime, importAnchor, `${importAnchor}\nconst { extractSocialContext, formatGroupHistory } = require('./cognition/socialContext');`, 'runtime import');
+  runtime = replaceOnce(runtime, importAnchor, `${importAnchor}\nconst { extractSocialContext, formatGroupHistory } = require('./cognition/socialContext');`, 'runtime social import');
+}
+if (!runtime.includes("require('./cognition/conversationThreads')")) {
+  const socialImport = "const { extractSocialContext, formatGroupHistory } = require('./cognition/socialContext');";
+  runtime = replaceOnce(runtime, socialImport, `${socialImport}\nconst { ConversationThreads, looksLikeFollowup } = require('./cognition/conversationThreads');\nconst exauceeConversationThreads = new ConversationThreads(); // ${THREAD_MARKER}`, 'thread import');
 }
 
 if (!runtime.includes(MARKER)) {
@@ -40,6 +45,13 @@ if (!runtime.includes(MARKER)) {
   const learnReplacement = `  if (isGroupConversation) {\n    const speakerLabel = social.speakerName || String(userId).split('@')[0] || 'membre';\n    if (!SENSITIVE_TEXT_RE.test(routed.text)) {\n      exaucee.memory.remember(sharedSocialIds, {\n        type: 'episode',\n        value: \`human(\${speakerLabel}|\${userId}): \${routed.text}\`,\n        source: 'group-social-context'\n      });\n    }\n    exaucee.memory.remember(sharedSocialIds, {\n      type: 'episode',\n      value: \`assistant(Exaucée): \${answer}\`,\n      source: provider\n    });\n  }\n  exaucee.cognition.learn(exaucee.memory, ids, analysis, answer);`;
   runtime = replaceOnce(runtime, learnAnchor, learnReplacement, 'group social learning');
 }
+
+if (!runtime.includes('active-conversation-thread')) {
+  const routeBlock = `  const knownBotJids = botJids(sock);\n  const routed = exaucee.inspectMessage({\n    msg,\n    botJid: knownBotJids[0],\n    botJids: knownBotJids,\n    humanTakeover: hasHumanTakeover(sessionId, chatId)\n  });\n\n  if (!routed.shouldRespond || !routed.text.trim()) return false;\n\n  const userId = actorJid(msg);`;
+  const routeReplacement = `  const knownBotJids = botJids(sock);\n  const userId = actorJid(msg);\n  let routed = exaucee.inspectMessage({\n    msg,\n    botJid: knownBotJids[0],\n    botJids: knownBotJids,\n    humanTakeover: hasHumanTakeover(sessionId, chatId)\n  });\n\n  // ${THREAD_MARKER}\n  // Après une sollicitation réelle, seul le même membre peut poursuivre brièvement\n  // sans répéter « Exaucée », et uniquement si son message ressemble à une suite.\n  if (!routed.shouldRespond && chatId.endsWith('@g.us') &&\n      exauceeConversationThreads.active(sessionId, chatId, userId) &&\n      looksLikeFollowup(routed.text)) {\n    routed = { ...routed, shouldRespond: true, reason: 'active-conversation-thread' };\n  }\n\n  if (!routed.shouldRespond || !routed.text.trim()) return false;\n  if (chatId.endsWith('@g.us')) exauceeConversationThreads.touch(sessionId, chatId, userId);`;
+  runtime = replaceOnce(runtime, routeBlock, routeReplacement, 'conversation continuation');
+}
+
 fs.writeFileSync(runtimePath, runtime, 'utf8');
 
 for (const file of [runtimePath, cognitionPath]) {
@@ -47,4 +59,4 @@ for (const file of [runtimePath, cognitionPath]) {
   if (checked.status !== 0) throw new Error(`[exaucee-social] syntaxe invalide ${path.relative(ROOT, file)}: ${checked.stderr || checked.stdout}`);
 }
 
-console.log('[exaucee-social] ✅ citations, mentions, auteurs et mémoire sociale de groupe installés');
+console.log('[exaucee-social] ✅ citations, mentions, auteurs, mémoire sociale et continuité de discussion installés');
