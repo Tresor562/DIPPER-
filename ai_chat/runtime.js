@@ -125,10 +125,6 @@ async function sendExaucee(sock, exaucee, chatId, msg, text, mentions = []) {
   const payload = { text: sanitizeModelText(text) };
   if (mentions.length) payload.mentions = mentions;
 
-  // Baileys v6 peut accepter sans erreur un quoted privé malformé quand
-  // msg.key.participant est absent, puis ne jamais afficher le message côté
-  // client. THE BIG DIPPER évite déjà ce cas dans buildExtra.reply(). Exaucée
-  // applique la même règle : sans quoted en privé, quoted + fallback en groupe.
   let sent;
   if (!chatId.endsWith('@g.us')) {
     sent = await sock.sendMessage(chatId, payload);
@@ -217,6 +213,14 @@ async function executeDynamic(exaucee, sessionId, text, chatId, sock, msg) {
   return false;
 }
 
+async function handleExauceeDynamicCommand({ sock, msg, commandName } = {}) {
+  const sessionId = sessionContext.getCurrentSessionId();
+  const exaucee = getInstance(sessionId);
+  if (!exaucee.config.enabled || !sock || !msg?.message || !msg?.key?.remoteJid || msg.key.fromMe) return false;
+  ensureScheduler(exaucee, sock);
+  return executeDynamic(exaucee, sessionId, commandName, msg.key.remoteJid, sock, msg);
+}
+
 async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, botIsAdmin = false, extra = {} } = {}) {
   const sessionId = sessionContext.getCurrentSessionId();
   const exaucee = getInstance(sessionId);
@@ -254,6 +258,11 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   if (dynamic && (actor.isOwner || actor.isSuperMe || actor.isAdmin)) {
     if (SENSITIVE_TEXT_RE.test(dynamic.response)) {
       await sendExaucee(sock, exaucee, chatId, msg, `Je ne peux pas enregistrer une commande contenant un secret ou un identifiant sensible. 🌸`);
+      return true;
+    }
+    const staticCommands = global.commands || new Map();
+    if (staticCommands.has(dynamic.name)) {
+      await sendExaucee(sock, exaucee, chatId, msg, `La commande ${dynamic.name} existe déjà dans THE BIG DIPPER. Je ne la remplacerai pas. 🌸`);
       return true;
     }
     exaucee.dynamicCommands.define(sessionId, {
@@ -317,12 +326,14 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
 
 module.exports = {
   handleExauceeMessage,
+  handleExauceeDynamicCommand,
   getInstance,
   hasHumanTakeover,
   rememberHumanTakeover,
   ensureScheduler,
   sanitizeModelText,
   sendExaucee,
+  executeDynamic,
   handleGameMaster,
   HUMAN_TAKEOVER_MS
 };
