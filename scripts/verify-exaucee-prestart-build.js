@@ -25,54 +25,34 @@ function runNode(relativePath, args = []) {
   });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
-  if (result.error) {
-    throw new Error(`[exaucee-build-preflight] ${relativePath}: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(`[exaucee-build-preflight] ${relativePath} a échoué (code ${result.status}).`);
-  }
+  if (result.error) throw new Error(`[exaucee-build-preflight] ${relativePath}: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`[exaucee-build-preflight] ${relativePath} a échoué (code ${result.status}).`);
 }
 
 function verifyExauceePrestartBuild() {
   console.log('[exaucee-build-preflight] vérification de la chaîne Exaucée avant runtime...');
-
   for (const installer of installers) runNode(installer);
 
   for (const file of [
-    'handler.js',
-    'index.js',
-    'api/server.js',
-    'ai_chat/runtime.js',
-    'ai_chat/ai/zeroCostRouter.js',
-    'ai_chat/ai/responseQuality.js',
-    'ai_chat/knowledge/creatorProfile.js',
-    'ai_chat/cognition/intentOrchestrator.js',
-  ]) {
-    runNode('--check', [file]);
-  }
+    'handler.js','index.js','api/server.js','ai_chat/runtime.js','ai_chat/core/index.js',
+    'ai_chat/ai/zeroCostRouter.js','ai_chat/ai/responseQuality.js',
+    'ai_chat/memory/store.js','ai_chat/cognition/cognitivePolicy.js','ai_chat/cognition/cognitiveEngine.js',
+    'ai_chat/knowledge/creatorProfile.js','ai_chat/cognition/intentOrchestrator.js',
+  ]) runNode('--check', [file]);
 
   runNode('--test', ['tests/exaucee-conversation-quality.test.js']);
+  runNode('--test', ['tests/exaucee-cognitive-v2.test.js']);
 
-  // Deuxième passage : les installateurs doivent être idempotents. C'est crucial
-  // car Render les exécute une fois au build puis npm start relance prestart.
   for (const installer of installers) runNode(installer);
 
-  runNode('--check', ['ai_chat/runtime.js']);
-  runNode('--check', ['ai_chat/ai/zeroCostRouter.js']);
-  runNode('--check', ['ai_chat/ai/responseQuality.js']);
-  runNode('--check', ['handler.js']);
-  runNode('--check', ['index.js']);
+  for (const file of ['ai_chat/runtime.js','ai_chat/core/index.js','ai_chat/ai/zeroCostRouter.js','ai_chat/ai/responseQuality.js','ai_chat/memory/store.js','ai_chat/cognition/cognitivePolicy.js','handler.js','index.js']) runNode('--check',[file]);
 
-  console.log('[exaucee-build-preflight] ✅ chaîne Exaucée valide + idempotente avant démarrage');
+  console.log('[exaucee-build-preflight] ✅ chaîne Exaucée valide + idempotente + cognitive v2 avant démarrage');
 }
 
 if (require.main === module) {
-  try {
-    verifyExauceePrestartBuild();
-  } catch (error) {
-    console.error(error.stack || error.message || error);
-    process.exit(1);
-  }
+  try { verifyExauceePrestartBuild(); }
+  catch (error) { console.error(error.stack || error.message || error); process.exit(1); }
 }
 
 module.exports = verifyExauceePrestartBuild;
