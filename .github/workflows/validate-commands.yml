@@ -20,7 +20,7 @@ jobs:
       - name: Install production dependencies
         run: npm install --omit=dev
       - name: Run Exaucee tests
-        run: node --test tests/exaucee-core.test.js tests/exaucee-runtime.test.js tests/exaucee-dynamic.test.js
+        run: node --test tests/exaucee-core.test.js tests/exaucee-runtime.test.js tests/exaucee-dynamic.test.js tests/exaucee-bootstrap.test.js
       - name: Install Exaucee hooks
         run: node scripts/install-exaucee.js
       - name: Verify final handler and bootstrap syntax
