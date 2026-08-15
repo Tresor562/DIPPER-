@@ -21,14 +21,14 @@ const { DecisionLog } = require('../audit/decisionLog');
 const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'default';
 
 function createGuaranteedBrain(primary) {
-  const local = new LocalBrain();
+  const local = primary?.localBrain || new LocalBrain();
   return {
     localBrain: local,
+    providerStatus: (...args) => typeof primary?.providerStatus === 'function' ? primary.providerStatus(...args) : null,
     async complete(request = {}) {
-      const localAnswer = local.answer(request.messages || []);
-      if (localAnswer?.text && Number(localAnswer.confidence || 0) >= 0.92) {
-        return { provider: 'exaucee-local-brain', text: localAnswer.text };
-      }
+      // IMPORTANT: le vrai modèle génératif décide en premier. Le cerveau à règles
+      // n'est qu'un dernier recours, sinon il peut répondre hors contexte avec une
+      // fausse confiance et donner l'impression qu'Exaucée ne comprend rien.
       try {
         const result = await primary.complete(request);
         if (result?.text?.trim()) return result;
@@ -58,6 +58,8 @@ function createExaucee(options = {}) {
     getDynamicCommands: (sid, opts) => dynamicCommands.list(sid, opts),
     capabilities: [
       'conversation contextuelle et mémoire',
+      'routeur IA adaptatif FAST/NORMAL/DEEP/AGENT/DUAL/CRITICAL',
+      'Groq GPT-OSS, Gemini et OpenRouter free avec fallback',
       'commandes natives via CommandBridge',
       'commandes dynamiques validées',
       'rappels persistants',
