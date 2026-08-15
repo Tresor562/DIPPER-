@@ -21,10 +21,12 @@ jobs:
         run: npm install --omit=dev
       - name: Run Exaucee tests
         run: node --test tests/exaucee-core.test.js tests/exaucee-runtime.test.js tests/exaucee-dynamic.test.js
-      - name: Install Exaucee handler hook
+      - name: Install Exaucee hooks
         run: node scripts/install-exaucee.js
-      - name: Verify final handler syntax
-        run: node --check handler.js
+      - name: Verify final handler and bootstrap syntax
+        run: |
+          node --check handler.js
+          node --check index.js
       - name: Verify hook idempotence
         run: node scripts/install-exaucee.js
       - name: Verify Exaucee module syntax
