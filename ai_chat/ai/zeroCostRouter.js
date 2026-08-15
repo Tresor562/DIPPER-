@@ -6,20 +6,23 @@ const { getConfig } = require('../config');
 class ZeroCostRouter {
   constructor(options = {}) {
     this.config = { ...getConfig(), ...options };
+    this.pollinationsKey = process.env.POLLINATIONS_API_KEY || process.env.POLLINATIONS_KEY || '';
   }
 
   async complete({ messages, mode = 'normal' }) {
     const providers = [
-      () => this._pollinations(messages, mode, 'openai'),
-      () => this._pollinations(messages, mode, 'mistral'),
+      // Endpoint texte simple actuel. Il est tenté d'abord car certaines
+      // installations Pollinations l'acceptent encore sans clé.
+      () => this._pollinationsSimple(messages, mode, 'openai'),
+      // Endpoint OpenAI-compatible officiel actuel (avec clé si disponible).
+      () => this._pollinationsChat(messages, mode, 'openai'),
+      () => this._pollinationsSimple(messages, mode, 'mistral'),
       () => this._groq(messages, mode),
       () => this._gemini(messages, mode),
       () => this._openRouter(messages, mode)
     ];
 
     // Ollama/local n'est essayé que s'il a été explicitement configuré.
-    // Render n'héberge pas Ollama sur 127.0.0.1 par défaut : l'ancien ordre
-    // faisait donc commencer chaque requête par un provider impossible.
     if (process.env.EXAUCEE_LOCAL_BASE_URL) {
       providers.push(() => this._local(messages, mode));
     }
@@ -32,28 +35,59 @@ class ZeroCostRouter {
       } catch (err) {
         const status = err.response?.status;
         const code = err.code || status || 'ERR';
-        errors.push(`${code}:${String(err.message || err).slice(0, 140)}`);
+        errors.push(`${code}:${String(err.message || err).slice(0, 120)}`);
       }
     }
 
+    console.warn('[Exaucée/AI] Tous les providers ont échoué:', errors.join(' | '));
     const error = new Error(`Aucun cerveau gratuit disponible: ${errors.join(' | ')}`);
     error.code = 'EXAUCEE_NO_FREE_PROVIDER';
     throw error;
   }
 
-  async _pollinations(messages, _mode, model = 'openai') {
-    const res = await axios.post('https://text.pollinations.ai/openai', {
+  _flattenPrompt(messages) {
+    return (messages || [])
+      .map(m => `${String(m.role || 'user').toUpperCase()}: ${String(m.content || '')}`)
+      .join('\n\n')
+      .slice(0, 12000);
+  }
+
+  async _pollinationsSimple(messages, _mode, model = 'openai') {
+    const prompt = this._flattenPrompt(messages);
+    const url = `https://gen.pollinations.ai/text/${encodeURIComponent(prompt)}`;
+    const params = { model };
+    if (this.pollinationsKey) params.key = this.pollinationsKey;
+
+    const res = await axios.get(url, {
+      params,
+      timeout: 25000,
+      headers: { 'User-Agent': 'THE-BIG-DIPPER-Exaucee/2.0' },
+      responseType: 'text',
+      transformResponse: [data => data]
+    });
+
+    const text = typeof res.data === 'string'
+      ? res.data
+      : res.data?.text || res.data?.content || '';
+    if (!String(text || '').trim()) throw new Error(`pollinations-simple-${model}: réponse vide`);
+    return { provider: `pollinations-simple-${model}`, text: String(text).trim() };
+  }
+
+  async _pollinationsChat(messages, _mode, model = 'openai') {
+    if (!this.pollinationsKey) throw new Error('pollinations-chat: clé absente');
+    const res = await axios.post('https://gen.pollinations.ai/v1/chat/completions', {
       model,
       messages,
       temperature: 0.45,
       max_tokens: 1200,
       stream: false
     }, {
-      timeout: 20000,
+      timeout: 30000,
       headers: {
+        Authorization: `Bearer ${this.pollinationsKey}`,
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        'User-Agent': 'THE-BIG-DIPPER-Exaucee/1.0'
+        'User-Agent': 'THE-BIG-DIPPER-Exaucee/2.0'
       }
     });
 
@@ -61,10 +95,9 @@ class ZeroCostRouter {
       || res.data?.choices?.[0]?.text
       || res.data?.text
       || res.data?.content
-      || (typeof res.data === 'string' ? res.data : '');
-
-    if (!String(text || '').trim()) throw new Error(`pollinations-${model}: réponse vide`);
-    return { provider: `pollinations-${model}`, text: String(text).trim() };
+      || '';
+    if (!String(text || '').trim()) throw new Error(`pollinations-chat-${model}: réponse vide`);
+    return { provider: `pollinations-chat-${model}`, text: String(text).trim() };
   }
 
   async _local(messages) {
