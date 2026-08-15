@@ -15,7 +15,16 @@ function copy(source, target) {
 }
 
 function runNode(file, cwd) {
-  const result = spawnSync(process.execPath, [file], { cwd, encoding: 'utf8', timeout: 30_000 });
+  // Ce test exécute les installateurs HOT dans un fixture minimal temporaire.
+  // Le préflight Exaucée de production exige l'arbre complet du bot et ne doit
+  // donc jamais être lancé depuis ce fixture. Le build Render exécute ensuite
+  // le vrai install-hot-oidc-auth.js dans bot/, où le préflight reste actif.
+  const result = spawnSync(process.execPath, [file], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...process.env, EXAUCEE_BUILD_PREFLIGHT: '1' },
+  });
   if (result.status !== 0) {
     throw new Error(`${path.basename(file)} a échoué:\n${result.stderr || result.stdout}`);
   }
@@ -41,9 +50,6 @@ test('les installateurs HOT + pull chiffré + OIDC sont idempotents malgré les 
     fs.writeFileSync(path.join(tmp, 'index.js'), `'use strict';\nlet _mongoDb = null;\nlet _sessionManager = null;\nconst originalConsoleLog = console.log;\nconst originalConsoleError = console.error;\nasync function initMultiSession() {\n  try {\n    const { getDb }          = require('./utils/mongoClient');\n    const sm                  = require('./utils/sessionManager');\n    _mongoDb                  = await getDb();\n    _sessionManager           = sm;\n    await sm.loadAllSessions(_mongoDb);\n    return true;\n  } catch (err) {\n    return false;\n  }\n}\nmodule.exports = { initMultiSession };\n`);
 
     fs.mkdirSync(path.join(tmp, 'api'), { recursive: true });
-    // Le wrapper réel peut modifier les commentaires et l'indentation avant
-    // que l'installateur HOT ne s'exécute. Ce fixture évite volontairement
-    // l'ancien JSDoc exact qui avait cassé le build Render.
     fs.writeFileSync(path.join(tmp, 'api', 'server.js'), `'use strict';\nfunction sendJSON(res, status, obj) { return { res, status, obj }; }\nfunction readJsonBody() { return Promise.resolve({}); }\nfunction getClientIp() { return '127.0.0.1'; }\nasync function handlePairRoute() {}\nfunction handleSessionStatusRoute() {}\nasync function handleSessionStopRoute() {}\nfunction tryServeStatic() { return false; }\nfunction applyCorsHeaders() {}\n// [WRAPPER PATCH] commentaire createServer volontairement différent\n  function   createServer ( ) {\n  return async function handler(req, res) {\n    applyCorsHeaders(req, res);\n    const url = new URL(req.url || '/', 'http://localhost');\n        if ( req.method === 'GET' && url.pathname === '/health' ) {\n        return sendJSON(res, 200, { status: 'ok' });\n      }\n      if (req.method === 'POST' && url.pathname === '/pair') {\n        return await handlePairRoute(req, res);\n      }\n      if (req.method === 'GET' && url.pathname === '/session/status') {\n        return handleSessionStatusRoute(req, res, url.searchParams);\n      }\n      if (req.method === 'POST' && url.pathname === '/session/stop') {\n        return await handleSessionStopRoute(req, res);\n      }\n      if (tryServeStatic(req, res, url.pathname)) return;\n      return sendJSON(res, 404, { error: 'NOT_FOUND' });\n  };\n}\nmodule.exports = { createServer };\n`);
 
     runNode(path.join(tmp, 'scripts', 'install-hot-command-updater.js'), tmp);
