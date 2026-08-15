@@ -124,7 +124,22 @@ function formatScore(gameMaster, chatId) {
 async function sendExaucee(sock, exaucee, chatId, msg, text, mentions = []) {
   const payload = { text: sanitizeModelText(text) };
   if (mentions.length) payload.mentions = mentions;
-  const sent = await sock.sendMessage(chatId, payload, { quoted: msg });
+
+  // Baileys v6 peut accepter sans erreur un quoted privé malformé quand
+  // msg.key.participant est absent, puis ne jamais afficher le message côté
+  // client. THE BIG DIPPER évite déjà ce cas dans buildExtra.reply(). Exaucée
+  // applique la même règle : sans quoted en privé, quoted + fallback en groupe.
+  let sent;
+  if (!chatId.endsWith('@g.us')) {
+    sent = await sock.sendMessage(chatId, payload);
+  } else {
+    try {
+      sent = await sock.sendMessage(chatId, payload, { quoted: msg });
+    } catch (_) {
+      sent = await sock.sendMessage(chatId, payload);
+    }
+  }
+
   exaucee.markOwnMessage(sent?.key?.id);
   return sent;
 }
@@ -153,13 +168,7 @@ async function handleGameMaster(exaucee, { sock, msg, chatId, userId, text }) {
     const roundMatch = lower.match(/\b(\d{1,2})\s*(?:questions?|manches?|rounds?)\b/);
     const rounds = roundMatch ? Number(roundMatch[1]) : 5;
     const started = exaucee.gameMaster.startQuiz(chatId, { by: userId, category, rounds });
-    await sendExaucee(
-      sock,
-      exaucee,
-      chatId,
-      msg,
-      `🎮 *Quiz ${started.game.category === 'anime' ? 'Anime' : 'Culture générale'} — ${started.game.totalRounds} manches*\n\n*Question 1/${started.game.totalRounds}*\n${started.question}\n\nRéponds à ce message avec ta réponse 🌸`
-    );
+    await sendExaucee(sock, exaucee, chatId, msg, `🎮 *Quiz ${started.game.category === 'anime' ? 'Anime' : 'Culture générale'} — ${started.game.totalRounds} manches*\n\n*Question 1/${started.game.totalRounds}*\n${started.question}\n\nRéponds à ce message avec ta réponse 🌸`);
     exaucee.audit.write({ type: 'game_start', game: 'quiz', chatId, userId, gameId: started.game.id });
     return true;
   }
@@ -186,23 +195,10 @@ async function handleGameMaster(exaucee, { sock, msg, chatId, userId, text }) {
     }
     if (result.finished) {
       const board = exaucee.gameMaster.scoreboard(chatId) || [];
-      await sendExaucee(
-        sock,
-        exaucee,
-        chatId,
-        msg,
-        `✅ Bonne réponse ! *${result.correctAnswer}*\n\n🏁 *Quiz terminé !*\n${formatScore(exaucee.gameMaster, chatId)}\n\nBien joué 🌸`,
-        board.map(x => x.userId).filter(Boolean)
-      );
+      await sendExaucee(sock, exaucee, chatId, msg, `✅ Bonne réponse ! *${result.correctAnswer}*\n\n🏁 *Quiz terminé !*\n${formatScore(exaucee.gameMaster, chatId)}\n\nBien joué 🌸`, board.map(x => x.userId).filter(Boolean));
       return true;
     }
-    await sendExaucee(
-      sock,
-      exaucee,
-      chatId,
-      msg,
-      `✅ Bonne réponse ! *${result.correctAnswer}*\n\n*Question ${result.round}/${result.totalRounds}*\n${result.nextQuestion}`
-    );
+    await sendExaucee(sock, exaucee, chatId, msg, `✅ Bonne réponse ! *${result.correctAnswer}*\n\n*Question ${result.round}/${result.totalRounds}*\n${result.nextQuestion}`);
     return true;
   }
 
@@ -215,8 +211,7 @@ async function executeDynamic(exaucee, sessionId, text, chatId, sock, msg) {
   const record = exaucee.dynamicCommands.get(sessionId, first, { groupId: chatId.endsWith('@g.us') ? chatId : null });
   if (!record) return false;
   if (record.workflow?.type === 'reply') {
-    const sent = await sock.sendMessage(chatId, { text: sanitizeModelText(record.workflow.text || '') }, { quoted: msg });
-    exaucee.markOwnMessage(sent?.key?.id);
+    await sendExaucee(sock, exaucee, chatId, msg, record.workflow.text || '');
     return true;
   }
   return false;
@@ -327,6 +322,7 @@ module.exports = {
   rememberHumanTakeover,
   ensureScheduler,
   sanitizeModelText,
+  sendExaucee,
   handleGameMaster,
   HUMAN_TAKEOVER_MS
 };
