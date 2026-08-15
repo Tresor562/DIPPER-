@@ -9,6 +9,7 @@ const { routeMessage, getText } = require('../router/socialRouter');
 const { ZeroCostRouter } = require('../ai/zeroCostRouter');
 const { LocalBrain } = require('../ai/localBrain');
 const { CognitiveEngine } = require('../cognition/cognitiveEngine');
+const { ResearchEngine } = require('../research/researchEngine');
 const { CommandBridge } = require('../tools/commandBridge');
 const { PersistentScheduler } = require('../scheduler/persistentScheduler');
 const { GameRegistry, quizEngine, truthOrDareEngine } = require('../games/registry');
@@ -21,6 +22,7 @@ const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.
 function createGuaranteedBrain(primary) {
   const local = new LocalBrain();
   return {
+    localBrain: local,
     async complete(request = {}) {
       const localAnswer = local.answer(request.messages || []);
       if (localAnswer?.text && Number(localAnswer.confidence || 0) >= 0.92) {
@@ -43,6 +45,7 @@ function createExaucee(options = {}) {
   const primaryAi = options.ai || new ZeroCostRouter(config);
   const ai = options.ai ? primaryAi : createGuaranteedBrain(primaryAi);
   const cognition = options.cognition || new CognitiveEngine();
+  const research = options.research || new ResearchEngine();
   const commands = options.commands || global.commands || new Map();
   const commandBridge = options.commandBridge || new CommandBridge({ commands });
   const scheduler = options.scheduler || new PersistentScheduler({ file: path.join(root, 'sessions', sessionId, 'tasks.json') });
@@ -62,6 +65,7 @@ function createExaucee(options = {}) {
     memory,
     ai,
     cognition,
+    research,
     commandBridge,
     scheduler,
     games,
