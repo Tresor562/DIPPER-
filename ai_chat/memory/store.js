@@ -19,7 +19,7 @@ class MemoryStore {
 
   _load(scope) {
     if (this.cache.has(scope)) return this.cache.get(scope);
-    let value = { facts: [], episodes: [], preferences: {}, updatedAt: 0 };
+    let value = { facts: [], episodes: [], preferences: {}, summary: '', summaryTurns: 0, updatedAt: 0 };
     try { value = { ...value, ...JSON.parse(fs.readFileSync(this._file(scope), 'utf8')) }; } catch (_) {}
     this.cache.set(scope, value);
     return value;
@@ -32,8 +32,10 @@ class MemoryStore {
     const scope = this._scope(ids.sessionId, ids.chatId, ids.userId);
     const state = this._load(scope);
     const bucket = item.type === 'episode' ? 'episodes' : 'facts';
-    state[bucket].push({ value: String(item.value).slice(0, 2000), source: item.source || 'conversation', ts: Date.now() });
-    state[bucket] = state[bucket].slice(-200);
+    const value = String(item.value).slice(0, 3000);
+    const duplicate = state[bucket].slice(-30).some(x => String(x.value) === value);
+    if (!duplicate) state[bucket].push({ value, source: item.source || 'conversation', ts: Date.now() });
+    state[bucket] = state[bucket].slice(bucket === 'episodes' ? -400 : -250);
     state.updatedAt = Date.now();
     this._persist(scope, state);
     return true;
@@ -43,6 +45,39 @@ class MemoryStore {
     const scope = this._scope(ids.sessionId, ids.chatId, ids.userId);
     const state = this._load(scope);
     state.preferences[sanitize(key)] = value;
+    state.updatedAt = Date.now();
+    this._persist(scope, state);
+  }
+
+  updateSummary(ids, userText, assistantText) {
+    const scope = this._scope(ids.sessionId, ids.chatId, ids.userId);
+    const state = this._load(scope);
+    state.summaryTurns = Number(state.summaryTurns || 0) + 1;
+
+    // Résumé extractif local, sans appel réseau. Il conserve les éléments les plus
+    // récents et importants lorsque la conversation devient longue. Le LLM/local
+    // model reçoit ainsi une mémoire stable sans réinjecter des centaines de tours.
+    const important = [];
+    const u = String(userText || '').replace(/\s+/g, ' ').trim();
+    const a = String(assistantText || '').replace(/\s+/g, ' ').trim();
+    if (u) important.push(`U: ${u.slice(0, 420)}`);
+    if (a) important.push(`E: ${a.slice(0, 420)}`);
+
+    const previous = String(state.summary || '').split('\n').filter(Boolean);
+    const combined = [...previous, ...important];
+    state.summary = combined.slice(-28).join('\n').slice(-9000);
+    state.updatedAt = Date.now();
+    this._persist(scope, state);
+    return state.summary;
+  }
+
+  clearConversation(ids, { keepFacts = true } = {}) {
+    const scope = this._scope(ids.sessionId, ids.chatId, ids.userId);
+    const state = this._load(scope);
+    state.episodes = [];
+    state.summary = '';
+    state.summaryTurns = 0;
+    if (!keepFacts) state.facts = [];
     state.updatedAt = Date.now();
     this._persist(scope, state);
   }
