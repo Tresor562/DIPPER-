@@ -50,23 +50,36 @@ let indexSource = fs.readFileSync(indexPath, 'utf8');
 let indexChanged = false;
 
 if (!(indexSource.includes(BOOT_START) && indexSource.includes(BOOT_END))) {
-  const bootAnchor = `    } else if (connection === 'open') {\n      botReadyTime      = Date.now();\n      reconnectAttempts = 0;`;
-  if (!indexSource.includes(bootAnchor)) {
-    console.error('[install-exaucee] ancre bootstrap index introuvable — aucune modification appliquée');
-    process.exit(1);
+  // Les patches Render de résilience peuvent modifier l'espacement ou insérer
+  // des lignes autour du bloc connection=open. On cherche donc d'abord l'ancre
+  // historique, puis une forme tolérante. L'absence du hook bootstrap ne doit
+  // jamais empêcher le bot de démarrer : le runtime démarre aussi son scheduler
+  // lors du premier message traité.
+  const bootBlock = `\n\n      // [EXAUCEE-BOOTSTRAP:START]\n      // Démarre immédiatement le scheduler persistant après reconnexion afin\n      // que les rappels dus repartent sans attendre un nouveau message.\n      try {\n        const { bootstrapExaucee } = require('./ai_chat/runtime');\n        bootstrapExaucee({ sock, sessionId: sessionContext.DEFAULT_SESSION_ID });\n      } catch (exauceeBootstrapError) {\n        console.error('[Exaucée] erreur bootstrap:', exauceeBootstrapError.message);\n      }\n      // [EXAUCEE-BOOTSTRAP:END]`;
+
+  const exactAnchor = `    } else if (connection === 'open') {\n      botReadyTime      = Date.now();\n      reconnectAttempts = 0;`;
+  if (indexSource.includes(exactAnchor)) {
+    indexSource = indexSource.replace(exactAnchor, exactAnchor + bootBlock);
+    indexChanged = true;
+  } else {
+    const openRe = /(else\s+if\s*\(\s*connection\s*===\s*['\"]open['\"]\s*\)\s*\{[\s\S]{0,500}?reconnectAttempts\s*=\s*0\s*;)/;
+    if (openRe.test(indexSource)) {
+      indexSource = indexSource.replace(openRe, `$1${bootBlock}`);
+      indexChanged = true;
+    } else {
+      console.warn('[install-exaucee] ancre bootstrap index introuvable après patches — démarrage non bloqué; bootstrap différé au runtime');
+    }
   }
-
-  const bootBlock = `    } else if (connection === 'open') {\n      botReadyTime      = Date.now();\n      reconnectAttempts = 0;\n\n      // [EXAUCEE-BOOTSTRAP:START]\n      // Démarre immédiatement le scheduler persistant après reconnexion afin\n      // que les rappels dus repartent sans attendre un nouveau message.\n      try {\n        const { bootstrapExaucee } = require('./ai_chat/runtime');\n        bootstrapExaucee({ sock, sessionId: sessionContext.DEFAULT_SESSION_ID });\n      } catch (exauceeBootstrapError) {\n        console.error('[Exaucée] erreur bootstrap:', exauceeBootstrapError.message);\n      }\n      // [EXAUCEE-BOOTSTRAP:END]`;
-
-  indexSource = indexSource.replace(bootAnchor, bootBlock);
-  indexChanged = true;
 }
 
+// Important : écrire le handler même si un patch Render a rendu l'ancre index
+// introuvable. L'ancienne version quittait avant ces écritures et désactivait
+// entièrement Exaucée en production.
 if (handlerChanged) fs.writeFileSync(handlerPath, handlerSource);
 if (indexChanged) fs.writeFileSync(indexPath, indexSource);
 
 if (handlerChanged || indexChanged) {
   console.log('[install-exaucee] hooks installés avec succès');
 } else {
-  console.log('[install-exaucee] hooks déjà installés');
+  console.log('[install-exaucee] hooks déjà installés ou bootstrap différé');
 }
