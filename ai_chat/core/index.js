@@ -3,6 +3,7 @@
 const path = require('path');
 const persona = require('../personality/persona');
 const { getConfig } = require('../config');
+const { loadSettings } = require('../settings');
 const { MemoryStore } = require('../memory/store');
 const { routeMessage, getText } = require('../router/socialRouter');
 const { ZeroCostRouter } = require('../ai/zeroCostRouter');
@@ -16,8 +17,8 @@ const { DecisionLog } = require('../audit/decisionLog');
 const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'default';
 
 function createExaucee(options = {}) {
-  const config = { ...getConfig(), ...(options.config || {}) };
   const sessionId = safeSessionId(options.sessionId || 'default');
+  const config = { ...getConfig(), ...loadSettings(sessionId), ...(options.config || {}) };
   const root = options.root || path.join(process.cwd(), 'data', 'exaucee');
   const memory = options.memory || new MemoryStore({ root: path.join(root, 'memory') });
   const ai = options.ai || new ZeroCostRouter(config);
