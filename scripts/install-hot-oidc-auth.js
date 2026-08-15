@@ -48,3 +48,24 @@ for (const file of [serverPath, path.join(ROOT, 'utils', 'hotOidcAuth.js')]) {
   const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
   if (check.status !== 0) throw new Error(`[install-hot-oidc] syntaxe ${path.relative(ROOT, file)}: ${check.stderr || check.stdout}`);
 }
+
+// IMPORTANT DÉPLOIEMENT : cet installateur est exécuté pendant le build Render
+// par le wrapper. On valide ici toute la chaîne Exaucée avant que Render ne
+// remplace l'instance active. Si une ancre est cassée, le BUILD échoue et
+// l'ancienne instance continue de servir les utilisateurs.
+if (process.env.EXAUCEE_BUILD_PREFLIGHT !== '1') {
+  const preflight = spawnSync(process.execPath, ['scripts/verify-exaucee-prestart-build.js'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, EXAUCEE_BUILD_PREFLIGHT: '1' },
+    timeout: 180_000,
+  });
+  if (preflight.stdout) process.stdout.write(preflight.stdout);
+  if (preflight.stderr) process.stderr.write(preflight.stderr);
+  if (preflight.error) {
+    throw new Error(`[install-hot-oidc] préflight Exaucée interrompu: ${preflight.error.message}`);
+  }
+  if (preflight.status !== 0) {
+    throw new Error(`[install-hot-oidc] préflight Exaucée échoué (code ${preflight.status}).`);
+  }
+}
