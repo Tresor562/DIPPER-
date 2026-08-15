@@ -10,6 +10,7 @@ const { ZeroCostRouter } = require('../ai/zeroCostRouter');
 const { LocalBrain } = require('../ai/localBrain');
 const { CognitiveEngine } = require('../cognition/cognitiveEngine');
 const { ResearchEngine } = require('../research/researchEngine');
+const { BotKnowledge } = require('../knowledge/botKnowledge');
 const { CommandBridge } = require('../tools/commandBridge');
 const { PersistentScheduler } = require('../scheduler/persistentScheduler');
 const { GameRegistry, quizEngine, truthOrDareEngine } = require('../games/registry');
@@ -52,6 +53,20 @@ function createExaucee(options = {}) {
   const games = options.games || new GameRegistry();
   const gameMaster = options.gameMaster || new GameMaster({ file: path.join(root, 'sessions', sessionId, 'games.json') });
   const dynamicCommands = options.dynamicCommands || new DynamicCommandRegistry({ file: path.join(root, 'sessions', sessionId, 'dynamic-commands.json') });
+  const botKnowledge = options.botKnowledge || new BotKnowledge({
+    getCommands: () => global.commands || commands || new Map(),
+    getDynamicCommands: (sid, opts) => dynamicCommands.list(sid, opts),
+    capabilities: [
+      'conversation contextuelle et mémoire',
+      'commandes natives via CommandBridge',
+      'commandes dynamiques validées',
+      'rappels persistants',
+      'Game Master multi-parties',
+      'recherche web et analyse de liens',
+      'contrôles Exaucée owner',
+      'mémoire sociale de groupe'
+    ]
+  });
   const audit = options.audit || new DecisionLog({ root: path.join(root, 'audit', sessionId) });
   const recentExauceeMessageIds = new Set();
 
@@ -66,6 +81,7 @@ function createExaucee(options = {}) {
     ai,
     cognition,
     research,
+    botKnowledge,
     commandBridge,
     scheduler,
     games,
