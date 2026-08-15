@@ -1,0 +1,6 @@
+'use strict';
+const config=require('../../config');
+function preferences(){try{return require('../../utils/sessionPreferences');}catch(_){return null;}}
+function readValue(){const p=preferences();if(p?.get)return p.get('autoRecording',false)===true;return String(process.env.AUTO_RECORDING||'').toLowerCase()==='true';}
+function writeValue(v){const p=preferences();if(p?.set)p.set('autoRecording',v);else process.env.AUTO_RECORDING=v?'true':'false';}
+module.exports={name:'autorecording',aliases:['autorecord','recordingauto'],category:'👑 Owner',description:'Active ou désactive la présence automatique « enregistrement audio… ».',usage:`${config.prefix||'.'}autorecording <on/off/status>`,ownerOnly:true,async execute(sock,msg,args,extra){if(!extra.isOwner&&!msg.key.fromMe)return extra.reply(extra.phrases.denied());const action=String(args[0]||'status').toLowerCase();if(action==='on')writeValue(true);else if(action==='off')writeValue(false);else if(action!=='status')return extra.reply(`Usage : ${config.prefix||'.'}autorecording on | off | status`);const enabled=readValue();return extra.reply(`🎙️ Autorecording : ${enabled?'🟢 ON':'🔴 OFF'}\n\n${enabled?'Le bot affichera « enregistrement audio… » avant ses réponses.':'La présence automatique d’enregistrement est désactivée.'}`);}};
