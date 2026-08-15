@@ -1,0 +1,14 @@
+'use strict';
+const fs=require('fs');const path=require('path');const{spawnSync}=require('child_process');
+const ROOT=path.join(__dirname,'..');const handlerPath=path.join(ROOT,'handler.js');const runtimePath=path.join(ROOT,'utils','featurePackRuntime.js');const MARKER='[FEATURE PACK 2026-08-16 RUNTIME]';
+if(!fs.existsSync(handlerPath)||!fs.existsSync(runtimePath))throw new Error('[feature-pack] handler/runtime introuvable');
+let src=fs.readFileSync(handlerPath,'utf8');
+if(!src.includes(MARKER)){
+const oldPresence=`    if (config.autoTyping) await sock.sendPresenceUpdate('composing', from);\n\n    // [PERF] isAdmin calculé ici une seule fois (évite appel redondant dans buildExtra)\n    const _senderIsAdmin = isGroup ? await isAdmin(sock, sender, from, groupMetadata) : false;`;
+const newPresence=`    // ${MARKER}\n    const featurePackRuntime = require('./utils/featurePackRuntime');\n    await featurePackRuntime.applyAutoPresence(sock, from);\n\n    // [PERF] isAdmin calculé ici une seule fois (évite appel redondant dans buildExtra)\n    const _senderIsAdmin = isGroup ? await isAdmin(sock, sender, from, groupMetadata) : false;\n\n    if (isGroup && await featurePackRuntime.handleAdminAtAll({\n      sock, msg, from, sender, body, groupMetadata,\n      isAdmin: _senderIsAdmin, isOwner: isMe,\n    })) return;`;
+const pc=src.split(oldPresence).length-1;if(pc!==1)throw new Error(`[feature-pack] ancre présence attendue 1 fois, trouvée ${pc}`);src=src.replace(oldPresence,newPresence);
+const oldLink=`      if (groupSettings.antigroupmention && !msg.key.fromMe) await handleAntigroupmention(sock, msg, groupMetadata);\n      if (groupSettings.antilink && !msg.key.fromMe && _hasText) await handleAntilink(sock, msg, groupMetadata);`;
+const newLink=`      if (groupSettings.antigroupmention && !msg.key.fromMe) await handleAntigroupmention(sock, msg, groupMetadata);\n      if (groupSettings.antilink && !msg.key.fromMe && _hasText) await handleAntilink(sock, msg, groupMetadata);\n      if (groupSettings.antiwalink && !msg.key.fromMe && _hasText) {\n        try { await require('./utils/featurePackRuntime').handleAntiwalink(sock, msg, groupMetadata); } catch (_) {}\n      }`;
+const lc=src.split(oldLink).length-1;if(lc!==1)throw new Error(`[feature-pack] ancre protections attendue 1 fois, trouvée ${lc}`);src=src.replace(oldLink,newLink);fs.writeFileSync(handlerPath,src,'utf8');}
+for(const file of[handlerPath,runtimePath]){const c=spawnSync(process.execPath,['--check',file],{encoding:'utf8'});if(c.status!==0)throw new Error(`[feature-pack] syntaxe ${path.basename(file)}: ${c.stderr||c.stdout}`);}
+const final=fs.readFileSync(handlerPath,'utf8');for(const x of[MARKER,'handleAdminAtAll({','handleAntiwalink(sock, msg, groupMetadata)','applyAutoPresence(sock, from)'])if(!final.includes(x))throw new Error('[feature-pack] invariant absent: '+x);console.log('[feature-pack] ✅ présence auto + @all admin + antiwalink branchés');
