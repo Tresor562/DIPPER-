@@ -1,7 +1,7 @@
 'use strict';
 
 const DEFAULTS = Object.freeze({
-  enabled: false,
+  enabled: true,
   allowPaidProviders: false,
   maxCostPerRequest: 0,
   maxDailyCost: 0,
@@ -10,9 +10,12 @@ const DEFAULTS = Object.freeze({
 });
 
 function getConfig(env = process.env) {
+  const rawEnabled = env.EXAUCEE_ENABLED;
   return {
     ...DEFAULTS,
-    enabled: String(env.EXAUCEE_ENABLED || '').toLowerCase() === 'true',
+    enabled: rawEnabled == null || String(rawEnabled).trim() === ''
+      ? DEFAULTS.enabled
+      : String(rawEnabled).toLowerCase() === 'true',
     localBaseUrl: env.EXAUCEE_LOCAL_BASE_URL || 'http://127.0.0.1:11434',
     localModel: env.EXAUCEE_LOCAL_MODEL || 'qwen3:8b',
     groqKey: env.GROQ_API_KEY || '',
