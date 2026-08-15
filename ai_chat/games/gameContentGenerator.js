@@ -12,29 +12,20 @@ const FALLBACK_QUIZ=[
   {q:'Dans Jujutsu Kaisen, quel professeur possède les Six Yeux ?',a:['gojo','satoru gojo'],difficulty:'easy'},
   {q:'Combien font 12 × 8 ?',a:['96'],difficulty:'easy'}
 ];
-
+const MODES=new Set(['exact','participation','first_response','ai_judge','vote']);
 function stripFence(s=''){return String(s).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();}
 function normalizeQuestion(x){if(!x||typeof x!=='object')return null;const q=String(x.q||x.question||'').trim().slice(0,500);let a=x.a||x.answers||x.answer||[];if(!Array.isArray(a))a=[a];a=[...new Set(a.map(v=>String(v).trim().toLowerCase()).filter(Boolean))].slice(0,8);if(!q||!a.length)return null;return{q,a,difficulty:['easy','medium','hard'].includes(x.difficulty)?x.difficulty:'medium',explanation:String(x.explanation||'').slice(0,800)};}
 function validateQuestions(items,count){const seen=new Set(),out=[];for(const item of Array.isArray(items)?items:[]){const q=normalizeQuestion(item);if(!q)continue;const k=q.q.toLowerCase().replace(/\s+/g,' ');if(seen.has(k))continue;seen.add(k);out.push(q);if(out.length>=count)break;}return out;}
+function normalizeRound(x,i){if(!x||typeof x!=='object')return null;const prompt=String(x.prompt||x.task||x.question||'').trim().slice(0,1200);if(!prompt)return null;return{id:`round_${i+1}`,name:String(x.name||`Manche ${i+1}`).slice(0,120),type:String(x.type||'custom').slice(0,50),mode:MODES.has(x.mode)?x.mode:'ai_judge',prompt,criteria:String(x.criteria||'Respecter exactement la consigne donnée.').slice(0,1200),points:Math.max(1,Math.min(20,Number(x.points)||1)),timeLimitSec:Math.max(10,Math.min(600,Number(x.timeLimitSec)||60)),status:'pending'};}
 
-async function generateQuizContent(ai,spec){
-  const count=Math.max(1,Math.min(100,spec.rounds?.length||10));
-  if(ai?.complete){
-    try{
-      const result=await ai.complete({mode:'deep',messages:[
-        {role:'system',content:'Tu conçois un quiz pour un grand groupe WhatsApp. Retourne UNIQUEMENT un tableau JSON. Chaque élément: {"q":"question claire","a":["réponse acceptable"],"difficulty":"easy|medium|hard","explanation":"courte explication"}. Questions factuelles, non ambiguës, réponses vérifiables, aucune question dupliquée. Adapte progressivement la difficulté.'},
-        {role:'user',content:`Thème: ${spec.theme}. Nombre de questions: ${count}. Description du jeu: ${String(spec.description||'').slice(0,1500)}`}
-      ]});
-      const parsed=JSON.parse(stripFence(result?.text||''));const valid=validateQuestions(parsed,count);if(valid.length>=Math.min(3,count))return{source:result.provider||'ai',questions:valid};
-    }catch(_){}
-  }
-  const pool=FALLBACK_QUIZ.filter(q=>spec.theme==='général'||/anime|naruto|one piece|dragon ball|manga/i.test(spec.theme)?true:!/naruto|one piece|dragon ball|death note|demon|jujutsu/i.test(q.q));
-  const questions=[];for(let i=0;i<count;i++)questions.push({...pool[i%pool.length]});return{source:'local-fallback',questions};
+async function generateQuizContent(ai,spec){const count=Math.max(1,Math.min(100,spec.rounds?.length||10));if(ai?.complete){try{const result=await ai.complete({mode:'deep',messages:[{role:'system',content:'Tu conçois un quiz pour un grand groupe WhatsApp. Retourne UNIQUEMENT un tableau JSON. Chaque élément: {"q":"question claire","a":["réponse acceptable"],"difficulty":"easy|medium|hard","explanation":"courte explication"}. Questions factuelles, non ambiguës, réponses vérifiables, aucune question dupliquée. Adapte progressivement la difficulté.'},{role:'user',content:`Thème: ${spec.theme}. Nombre de questions: ${count}. Description du jeu: ${String(spec.description||'').slice(0,1500)}`}]});const parsed=JSON.parse(stripFence(result?.text||''));const valid=validateQuestions(parsed,count);if(valid.length>=Math.min(3,count))return{source:result.provider||'ai',questions:valid};}catch(_){}}const pool=FALLBACK_QUIZ;const questions=[];for(let i=0;i<count;i++)questions.push({...pool[i%pool.length]});return{source:'local-fallback',questions};}
+
+async function generateCustomRounds(ai,spec){const count=Math.max(1,Math.min(50,spec.rounds?.length||5));if(ai?.complete){try{const result=await ai.complete({mode:'deep',messages:[{role:'system',content:'Tu es concepteur de jeux pour grands groupes WhatsApp. Retourne UNIQUEMENT un tableau JSON. Chaque manche: {"name":"...","type":"custom","mode":"participation|first_response|ai_judge|vote","prompt":"consigne précise","criteria":"critères objectifs de réussite","points":1..20,"timeLimitSec":10..600}. Le jeu doit être réalisable uniquement par messages WhatsApp, sûr, clair, progressif et amusant.'},{role:'user',content:`Conçois ${count} manches pour ce jeu. Thème: ${spec.theme}. Format: ${spec.format}. Description: ${String(spec.description||'').slice(0,1800)}`}]});const parsed=JSON.parse(stripFence(result?.text||''));const rounds=(Array.isArray(parsed)?parsed:[]).map(normalizeRound).filter(Boolean).slice(0,count);if(rounds.length>=Math.min(2,count))return{source:result.provider||'ai',rounds};}catch(_){}}
+  return{source:'local-fallback',rounds:Array.from({length:count},(_,i)=>({id:`round_${i+1}`,name:`Manche ${i+1}`,type:'custom',mode:'participation',prompt:`Manche ${i+1} — réponds selon la consigne annoncée par Exaucée.`,criteria:'Une participation valide dans le temps imparti.',points:1,timeLimitSec:60,status:'pending'}))};
 }
 
-async function enrichGameSpec(ai,spec){
-  if(spec.gameType==='quiz'){const content=await generateQuizContent(ai,spec);return{...spec,metadata:{...(spec.metadata||{}),contentSource:content.source,questions:content.questions},rounds:spec.rounds.map((r,i)=>({...r,prompt:content.questions[i]?.q||r.name,answers:content.questions[i]?.a||[],explanation:content.questions[i]?.explanation||''}))};}
-  return spec;
-}
+async function judgeCreativeAnswer(ai,{round,answer}){if(!ai?.complete)return{accepted:true,points:Number(round.points||1),feedback:'Participation enregistrée.'};try{const result=await ai.complete({mode:'normal',messages:[{role:'system',content:'Tu arbitres UNE réponse à une manche de jeu. Retourne UNIQUEMENT JSON: {"accepted":true|false,"points":nombre,"feedback":"phrase courte"}. N’évalue que selon les critères fournis. Les points doivent rester entre 0 et le maximum indiqué.'},{role:'user',content:`Consigne: ${round.prompt}\nCritères: ${round.criteria}\nMaximum: ${round.points} points\nRéponse joueur: ${String(answer).slice(0,1500)}`}]});const j=JSON.parse(stripFence(result?.text||''));return{accepted:Boolean(j.accepted),points:Math.max(0,Math.min(Number(round.points||1),Number(j.points)||0)),feedback:String(j.feedback||'').slice(0,300)};}catch(_){return{accepted:true,points:Number(round.points||1),feedback:'Participation enregistrée.'};}}
 
-module.exports={generateQuizContent,enrichGameSpec,validateQuestions,normalizeQuestion};
+async function enrichGameSpec(ai,spec){if(spec.gameType==='quiz'){const content=await generateQuizContent(ai,spec);return{...spec,metadata:{...(spec.metadata||{}),contentSource:content.source,questions:content.questions},rounds:spec.rounds.map((r,i)=>({...r,mode:'exact',prompt:content.questions[i]?.q||r.name,answers:content.questions[i]?.a||[],explanation:content.questions[i]?.explanation||''}))};}const custom=await generateCustomRounds(ai,spec);return{...spec,metadata:{...(spec.metadata||{}),contentSource:custom.source},rounds:custom.rounds};}
+
+module.exports={generateQuizContent,generateCustomRounds,judgeCreativeAnswer,enrichGameSpec,validateQuestions,normalizeQuestion,normalizeRound};
