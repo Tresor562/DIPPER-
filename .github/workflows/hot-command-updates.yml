@@ -1,0 +1,75 @@
+name: Hot command updates
+
+on:
+  push:
+    branches: [main, candidate/hot-command-updater]
+    paths:
+      - 'commands/**/*.js'
+      - 'utils/hotCommandUpdater.js'
+      - 'scripts/install-hot-command-updater.js'
+      - 'scripts/validate-hot-command.js'
+      - 'scripts/publish-hot-commands.js'
+      - 'tests/hot-command-updater.test.js'
+      - 'package.json'
+      - '.github/workflows/hot-command-updates.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hot-command-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate hot updater
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install production dependencies
+        run: npm install --omit=dev
+      - name: Test updater atomics and rollback
+        run: npm run test:hot-updater
+      - name: Install runtime hooks
+        run: node scripts/install-hot-command-updater.js
+      - name: Verify installer idempotence
+        run: node scripts/install-hot-command-updater.js
+      - name: Verify patched runtime syntax
+        run: |
+          node --check index.js
+          node --check api/server.js
+          node --check utils/hotCommandUpdater.js
+          node --check scripts/validate-hot-command.js
+          node --check scripts/publish-hot-commands.js
+      - name: Validate all static commands
+        run: npm run validate:commands
+
+  publish:
+    name: Publish command-only commit without Render restart
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Publish validated HOT batch
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          HOT_UPDATE_ENDPOINT: ${{ vars.HOT_UPDATE_ENDPOINT || 'https://the-big-dipper.onrender.com' }}
+          HOT_UPDATE_TOKEN: ${{ secrets.HOT_UPDATE_TOKEN || secrets.API_INTERNAL_TOKEN }}
+        run: node scripts/publish-hot-commands.js
