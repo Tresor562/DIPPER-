@@ -9,6 +9,7 @@ const { routeMessage, getText } = require('../router/socialRouter');
 const { ZeroCostRouter } = require('../ai/zeroCostRouter');
 const { LocalBrain } = require('../ai/localBrain');
 const { CognitiveEngine } = require('../cognition/cognitiveEngine');
+const { analyzeRequest, directive } = require('../cognition/cognitivePolicy');
 const { ResearchEngine } = require('../research/researchEngine');
 const { BotKnowledge } = require('../knowledge/botKnowledge');
 const { CommandBridge } = require('../tools/commandBridge');
@@ -26,14 +27,21 @@ function createGuaranteedBrain(primary) {
     localBrain: local,
     providerStatus: (...args) => typeof primary?.providerStatus === 'function' ? primary.providerStatus(...args) : null,
     async complete(request = {}) {
-      // IMPORTANT: le vrai modèle génératif décide en premier. Le cerveau à règles
-      // n'est qu'un dernier recours, sinon il peut répondre hors contexte avec une
-      // fausse confiance et donner l'impression qu'Exaucée ne comprend rien.
+      const original = Array.isArray(request.messages) ? request.messages : [];
+      const lastUser = [...original].reverse().find(m => m?.role === 'user')?.content || '';
+      const meta = analyzeRequest(lastUser);
+      const requestedMode = String(request.mode || 'normal').toLowerCase();
+      const mode = meta.asksAction ? 'agent' : meta.complex && requestedMode === 'normal' ? 'deep' : requestedMode;
+      const messages = [
+        ...original.filter((m, i) => !(i === 0 && m?.role === 'system')),
+      ];
+      const firstSystem = original.find(m => m?.role === 'system')?.content || '';
+      messages.unshift({ role:'system', content:[firstSystem, directive(meta)].filter(Boolean).join('\n\n') });
       try {
-        const result = await primary.complete(request);
-        if (result?.text?.trim()) return result;
+        const result = await primary.complete({ ...request, messages, mode });
+        if (result?.text?.trim()) return { ...result, cognitiveMeta:meta };
       } catch (_) {}
-      return local.fallback(request.messages || []);
+      return { ...local.fallback(messages), degraded:true, cognitiveMeta:meta };
     }
   };
 }
@@ -76,20 +84,7 @@ function createExaucee(options = {}) {
   if (!games.engines.has('truth-or-dare')) games.registerEngine(truthOrDareEngine);
 
   return {
-    sessionId,
-    persona,
-    config,
-    memory,
-    ai,
-    cognition,
-    research,
-    botKnowledge,
-    commandBridge,
-    scheduler,
-    games,
-    gameMaster,
-    dynamicCommands,
-    audit,
+    sessionId, persona, config, memory, ai, cognition, research, botKnowledge, commandBridge, scheduler, games, gameMaster, dynamicCommands, audit,
     markOwnMessage(id) {
       if (!id) return;
       recentExauceeMessageIds.add(id);
