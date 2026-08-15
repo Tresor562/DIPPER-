@@ -6,8 +6,13 @@ const {spawnSync}=require('child_process');
 const ROOT=path.join(__dirname,'..');
 const runtimePath=path.join(ROOT,'ai_chat','runtime.js');
 const MARKER='[EXAUCEE BOT KNOWLEDGE V1]';
+function installIntentOrchestrator(){ require('./install-exaucee-intent-orchestrator.js'); }
 let src=fs.readFileSync(runtimePath,'utf8');
-if(src.includes(MARKER)){console.log('[install-exaucee-bot-knowledge] déjà appliqué');process.exit(0);}
+if(src.includes(MARKER)){
+  console.log('[install-exaucee-bot-knowledge] déjà appliqué');
+  installIntentOrchestrator();
+  process.exit(0);
+}
 
 const anchor=`  // [EXAUCEE RESEARCH V1]\n  let researchReport = null;`;
 if(!src.includes(anchor))throw new Error('[install-exaucee-bot-knowledge] ancre research introuvable');
@@ -22,3 +27,4 @@ fs.writeFileSync(runtimePath,src,'utf8');
 const check=spawnSync(process.execPath,['--check',runtimePath],{encoding:'utf8'});
 if(check.status!==0)throw new Error(`[install-exaucee-bot-knowledge] runtime invalide: ${check.stderr||check.stdout}`);
 console.log('[install-exaucee-bot-knowledge] ✅ index vivant des commandes + fallback factuel installés');
+installIntentOrchestrator();
