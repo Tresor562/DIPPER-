@@ -16,8 +16,8 @@ function tempCommands() {
   return { root, commandsRoot };
 }
 
-function commandSource(label, aliases = []) {
-  return `'use strict';\nmodule.exports={name:'sample',aliases:${JSON.stringify(aliases)},async execute(){return ${JSON.stringify(label)};}};\n`;
+function commandSource(label, aliases = [], name = 'sample') {
+  return `'use strict';\nmodule.exports={name:${JSON.stringify(name)},aliases:${JSON.stringify(aliases)},async execute(){return ${JSON.stringify(label)};}};\n`;
 }
 
 function loadCommand(file) {
@@ -25,41 +25,54 @@ function loadCommand(file) {
   return require(file);
 }
 
-class FakeCursor {
-  constructor(rows) { this.rows = rows; }
-  sort() { return this; }
-  async toArray() { return this.rows.map(row => ({ ...row })); }
+function clone(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
 }
 
 class FakeDb {
-  constructor({ failBulk = false } = {}) {
-    this.failBulk = failBulk;
-    this.active = new Map();
+  constructor({ failManifest = false, failHistory = false, beforeManifestWrite = null } = {}) {
+    this.failManifest = failManifest;
+    this.failHistory = failHistory;
+    this.beforeManifestWrite = beforeManifestWrite;
+    this.manifest = null;
     this.history = [];
   }
+
   collection(name) {
     if (name === hot.ACTIVE_COLLECTION) {
       return {
-        bulkWrite: async ops => {
-          if (this.failBulk) throw new Error('mongo down');
-          for (const op of ops) {
-            const id = op.updateOne.filter._id;
-            this.active.set(id, { _id: id, ...op.updateOne.update.$set });
-          }
-          return { ok: 1 };
+        findOne: async filter => {
+          if (filter?._id !== hot.ACTIVE_MANIFEST_ID) return null;
+          return clone(this.manifest);
         },
-        find: () => new FakeCursor([...this.active.values()]),
+        updateOne: async (filter, update) => {
+          if (this.beforeManifestWrite) await this.beforeManifestWrite();
+          if (this.failManifest) throw new Error('mongo manifest down');
+          if (this.manifest && filter?.revision != null && Number(filter.revision) !== Number(this.manifest.revision)) {
+            return { matchedCount: 0, upsertedCount: 0 };
+          }
+          const existed = !!this.manifest;
+          this.manifest = {
+            ...(this.manifest || { _id: hot.ACTIVE_MANIFEST_ID }),
+            ...(update?.$setOnInsert || {}),
+            ...(update?.$set || {}),
+          };
+          return { matchedCount: existed ? 1 : 0, upsertedCount: existed ? 0 : 1 };
+        },
       };
     }
+
     if (name === hot.HISTORY_COLLECTION) {
       return {
         insertMany: async docs => {
-          if (this.failBulk) throw new Error('mongo down');
-          this.history.push(...docs.map(doc => ({ ...doc })));
+          if (this.failHistory) throw new Error('mongo history down');
+          this.history.push(...docs.map(doc => clone(doc)));
           return { acknowledged: true };
         },
       };
     }
+
     throw new Error(`collection inconnue ${name}`);
   }
 }
@@ -84,7 +97,9 @@ test('HOT remplace une commande atomiquement sans remplacer la Map du handler', 
     assert.equal(await map.get('sample').execute(), 'new');
     assert.equal(map.get('fresh'), map.get('sample'));
     assert.equal(result.success, true);
-    assert.equal(db.active.get('commands/general_tools/sample.js').commitSha, 'abc123');
+    assert.equal(result.revision, 1);
+    assert.equal(db.manifest.commitSha, 'abc123');
+    assert.equal(db.manifest.entries['commands/general_tools/sample.js'].commitSha, 'abc123');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -141,7 +156,7 @@ test('une collision avec une autre commande est refusée sans modification disqu
   }
 });
 
-test('si Mongo échoue après chargement, disque et Map reviennent à la version précédente', async () => {
+test('si Mongo échoue, disque et Map restent sur la version précédente', async () => {
   const { root, commandsRoot } = tempCommands();
   try {
     const file = path.join(commandsRoot, 'general_tools', 'sample.js');
@@ -155,7 +170,7 @@ test('si Mongo échoue après chargement, disque et Map reviennent à la version
         action: 'upsert',
         path: 'commands/general_tools/sample.js',
         source: commandSource('new', ['fresh']),
-      }], { db: new FakeDb({ failBulk: true }), commandsRoot, commandMap: map }),
+      }], { db: new FakeDb({ failManifest: true }), commandsRoot, commandMap: map }),
       error => error.code === 'HOT_PERSIST_FAILED'
     );
 
@@ -167,7 +182,75 @@ test('si Mongo échoue après chargement, disque et Map reviennent à la version
   }
 });
 
-test('une commande HOT persistée est restaurée depuis Mongo au prochain démarrage', async () => {
+test('la Map active ne bascule qu’après confirmation du manifeste Mongo', async () => {
+  const { root, commandsRoot } = tempCommands();
+  try {
+    const file = path.join(commandsRoot, 'general_tools', 'sample.js');
+    fs.writeFileSync(file, commandSource('old'));
+    const old = loadCommand(file);
+    const map = new Map([['sample', old]]);
+    let observedDuringPersistence = null;
+    const db = new FakeDb({
+      beforeManifestWrite: async () => {
+        observedDuringPersistence = await map.get('sample').execute();
+      },
+    });
+
+    await hot.applyBatch([{
+      action: 'upsert',
+      path: 'commands/general_tools/sample.js',
+      source: commandSource('new'),
+    }], { db, commandsRoot, commandMap: map });
+
+    assert.equal(observedDuringPersistence, 'old');
+    assert.equal(await map.get('sample').execute(), 'new');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('une erreur disque au milieu d’un lot restaure tous les fichiers déjà touchés', async () => {
+  const { root, commandsRoot } = tempCommands();
+  const firstPath = path.join(commandsRoot, 'general_tools', 'sample.js');
+  const secondPath = path.join(commandsRoot, 'general_tools', 'other.js');
+  const firstOld = commandSource('first-old', [], 'sample');
+  const secondOld = commandSource('second-old', [], 'other');
+  fs.writeFileSync(firstPath, firstOld);
+  fs.writeFileSync(secondPath, secondOld);
+  const first = loadCommand(firstPath);
+  const second = loadCommand(secondPath);
+  const map = new Map([['sample', first], ['other', second]]);
+
+  const originalRename = fs.renameSync;
+  let hotRenameCount = 0;
+  fs.renameSync = function patchedRename(from, to) {
+    if (String(from).includes('.hot-write-')) {
+      hotRenameCount++;
+      if (hotRenameCount === 2) throw new Error('simulated disk failure');
+    }
+    return originalRename.call(fs, from, to);
+  };
+
+  try {
+    await assert.rejects(
+      hot.applyBatch([
+        { action: 'upsert', path: 'commands/general_tools/sample.js', source: commandSource('first-new', [], 'sample') },
+        { action: 'upsert', path: 'commands/general_tools/other.js', source: commandSource('second-new', [], 'other') },
+      ], { db: new FakeDb(), commandsRoot, commandMap: map }),
+      error => error.code === 'HOT_DISK_ACTIVATION_FAILED'
+    );
+
+    assert.equal(fs.readFileSync(firstPath, 'utf8'), firstOld);
+    assert.equal(fs.readFileSync(secondPath, 'utf8'), secondOld);
+    assert.equal(await map.get('sample').execute(), 'first-old');
+    assert.equal(await map.get('other').execute(), 'second-old');
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('une commande HOT persistée est restaurée depuis le manifeste Mongo au prochain démarrage', async () => {
   const { root, commandsRoot } = tempCommands();
   try {
     const file = path.join(commandsRoot, 'general_tools', 'sample.js');
@@ -175,16 +258,22 @@ test('une commande HOT persistée est restaurée depuis Mongo au prochain démar
     const base = loadCommand(file);
     const map = new Map([['sample', base]]);
     const db = new FakeDb();
-    db.active.set('commands/general_tools/sample.js', {
-      _id: 'commands/general_tools/sample.js',
-      path: 'commands/general_tools/sample.js',
-      deleted: false,
-      source: commandSource('persisted', ['hot']),
-    });
+    db.manifest = {
+      _id: hot.ACTIVE_MANIFEST_ID,
+      revision: 4,
+      entries: {
+        'commands/general_tools/sample.js': {
+          path: 'commands/general_tools/sample.js',
+          deleted: false,
+          source: commandSource('persisted', ['hot']),
+        },
+      },
+    };
 
     const restored = await hot.hydrateActiveCommands({ db, commandsRoot, commandMap: map });
     assert.equal(restored.success, true);
     assert.equal(restored.restored, 1);
+    assert.equal(restored.revision, 4);
     assert.equal(await map.get('sample').execute(), 'persisted');
     assert.equal(map.get('hot'), map.get('sample'));
   } finally {
@@ -192,7 +281,7 @@ test('une commande HOT persistée est restaurée depuis Mongo au prochain démar
   }
 });
 
-test('la suppression HOT retire les clés et persiste un tombstone', async () => {
+test('la suppression HOT retire les clés et conserve un tombstone dans le manifeste', async () => {
   const { root, commandsRoot } = tempCommands();
   try {
     const file = path.join(commandsRoot, 'general_tools', 'sample.js');
@@ -209,7 +298,42 @@ test('la suppression HOT retire les clés et persiste un tombstone', async () =>
     assert.equal(fs.existsSync(file), false);
     assert.equal(map.has('sample'), false);
     assert.equal(map.has('s'), false);
-    assert.equal(db.active.get('commands/general_tools/sample.js').deleted, true);
+    assert.equal(db.manifest.entries['commands/general_tools/sample.js'].deleted, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('l’historique est écrit avant le manifeste actif', async () => {
+  const { root, commandsRoot } = tempCommands();
+  try {
+    const file = path.join(commandsRoot, 'general_tools', 'sample.js');
+    fs.writeFileSync(file, commandSource('old'));
+    const old = loadCommand(file);
+    const map = new Map([['sample', old]]);
+    const calls = [];
+    const db = new FakeDb();
+    const originalCollection = db.collection.bind(db);
+    db.collection = name => {
+      const collection = originalCollection(name);
+      if (name === hot.HISTORY_COLLECTION) {
+        const originalInsert = collection.insertMany;
+        collection.insertMany = async docs => { calls.push('history'); return originalInsert(docs); };
+      }
+      if (name === hot.ACTIVE_COLLECTION) {
+        const originalUpdate = collection.updateOne;
+        collection.updateOne = async (...args) => { calls.push('manifest'); return originalUpdate(...args); };
+      }
+      return collection;
+    };
+
+    await hot.applyBatch([{
+      action: 'upsert',
+      path: 'commands/general_tools/sample.js',
+      source: commandSource('new'),
+    }], { db, commandsRoot, commandMap: map });
+
+    assert.deepEqual(calls, ['history', 'manifest']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
