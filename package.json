@@ -13,7 +13,7 @@
     "start:multi": "node --expose-gc index.js",
     "start:railway": "node --expose-gc index.js",
     "test": "node --test tests/",
-    "test:hot-updater": "node --test tests/hot-command-updater.test.js tests/hot-oidc-auth.test.js tests/hot-installer.test.js tests/hot-release-crypto.test.js",
+    "test:hot-updater": "node --test tests/hot-command-updater.test.js tests/hot-oidc-auth.test.js tests/hot-installer.test.js tests/hot-release-crypto.test.js tests/hot-release-poller.test.js",
     "validate:commands": "node scripts/validate-commands.js",
     "audit:commands:4x": "node scripts/audit-commands-4x.js",
     "audit:menu-images": "node scripts/audit-menu-images.js",
