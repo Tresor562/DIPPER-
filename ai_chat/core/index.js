@@ -7,6 +7,7 @@ const { loadSettings } = require('../settings');
 const { MemoryStore } = require('../memory/store');
 const { routeMessage, getText } = require('../router/socialRouter');
 const { ZeroCostRouter } = require('../ai/zeroCostRouter');
+const { LocalBrain } = require('../ai/localBrain');
 const { CommandBridge } = require('../tools/commandBridge');
 const { PersistentScheduler } = require('../scheduler/persistentScheduler');
 const { GameRegistry, quizEngine, truthOrDareEngine } = require('../games/registry');
@@ -16,12 +17,30 @@ const { DecisionLog } = require('../audit/decisionLog');
 
 const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'default';
 
+function createGuaranteedBrain(primary) {
+  const local = new LocalBrain();
+  return {
+    async complete(request = {}) {
+      const localAnswer = local.answer(request.messages || []);
+      if (localAnswer?.text && Number(localAnswer.confidence || 0) >= 0.9) {
+        return { provider: 'exaucee-local-brain', text: localAnswer.text };
+      }
+      try {
+        const result = await primary.complete(request);
+        if (result?.text?.trim()) return result;
+      } catch (_) {}
+      return local.fallback(request.messages || []);
+    }
+  };
+}
+
 function createExaucee(options = {}) {
   const sessionId = safeSessionId(options.sessionId || 'default');
   const config = { ...getConfig(), ...loadSettings(sessionId), ...(options.config || {}) };
   const root = options.root || path.join(process.cwd(), 'data', 'exaucee');
   const memory = options.memory || new MemoryStore({ root: path.join(root, 'memory') });
-  const ai = options.ai || new ZeroCostRouter(config);
+  const primaryAi = options.ai || new ZeroCostRouter(config);
+  const ai = options.ai ? primaryAi : createGuaranteedBrain(primaryAi);
   const commands = options.commands || global.commands || new Map();
   const commandBridge = options.commandBridge || new CommandBridge({ commands });
   const scheduler = options.scheduler || new PersistentScheduler({ file: path.join(root, 'sessions', sessionId, 'tasks.json') });
@@ -59,4 +78,4 @@ function createExaucee(options = {}) {
   };
 }
 
-module.exports = { createExaucee, safeSessionId };
+module.exports = { createExaucee, safeSessionId, createGuaranteedBrain };
