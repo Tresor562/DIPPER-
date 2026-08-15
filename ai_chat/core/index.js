@@ -16,28 +16,14 @@ const { CommandBridge } = require('../tools/commandBridge');
 const { PersistentScheduler } = require('../scheduler/persistentScheduler');
 const { GameRegistry, quizEngine, truthOrDareEngine } = require('../games/registry');
 const { GameMaster } = require('../games/gameMaster');
+const { TournamentDirector } = require('../games/tournamentDirector');
 const { DynamicCommandRegistry } = require('../dynamic/registry');
 const { DecisionLog } = require('../audit/decisionLog');
 
 const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'default';
 const PRIVATE_RE=/(api[_ -]?key|token|secret|password|mot de passe|credential|cookie|authorization|session(?:id| key| token)?|bearer\s+)/i;
-
-function shouldDeliberate(mode, meta) {
-  return !meta.sensitive && (['deep','agent','critical','dual'].includes(mode) || meta.complex || meta.asksAction);
-}
-
-function planningMessages(messages, meta) {
-  const user=[...messages].reverse().find(m=>m?.role==='user')?.content||'';
-  return [
-    {role:'system',content:[
-      'Tu es le planificateur interne d’Exaucée. Tu ne réponds PAS à l’utilisateur.',
-      'Produis un brief compact en français avec seulement: objectif, contraintes, informations certaines, ambiguïtés importantes, besoin éventuel de recherche/outils, étapes recommandées et critères de réussite.',
-      'N’invente aucun fait. Ne révèle aucun secret. Ne donne pas de chaîne de pensée détaillée: reste synthétique et opérationnel.',
-      directive(meta)
-    ].join('\n')},
-    {role:'user',content:String(user).slice(0,12000)}
-  ];
-}
+function shouldDeliberate(mode, meta) { return !meta.sensitive && (['deep','agent','critical','dual'].includes(mode) || meta.complex || meta.asksAction); }
+function planningMessages(messages, meta) { const user=[...messages].reverse().find(m=>m?.role==='user')?.content||''; return [{role:'system',content:['Tu es le planificateur interne d’Exaucée. Tu ne réponds PAS à l’utilisateur.','Produis un brief compact en français avec seulement: objectif, contraintes, informations certaines, ambiguïtés importantes, besoin éventuel de recherche/outils, étapes recommandées et critères de réussite.','N’invente aucun fait. Ne révèle aucun secret. Ne donne pas de chaîne de pensée détaillée: reste synthétique et opérationnel.',directive(meta)].join('\n')},{role:'user',content:String(user).slice(0,12000)}]; }
 
 function createGuaranteedBrain(primary) {
   const local = primary?.localBrain || new LocalBrain();
@@ -53,20 +39,10 @@ function createGuaranteedBrain(primary) {
       const messages = [...original.filter((m, i) => !(i === 0 && m?.role === 'system'))];
       const firstSystem = original.find(m => m?.role === 'system')?.content || '';
       messages.unshift({ role:'system', content:[firstSystem, directive(meta)].filter(Boolean).join('\n\n') });
-
       if (shouldDeliberate(mode, meta) && !PRIVATE_RE.test(lastUser)) {
-        try {
-          const plan = await primary.complete({ messages:planningMessages(messages,meta), mode:'deep' });
-          if (plan?.text?.trim()) {
-            messages.splice(1,0,{role:'system',content:`BRIEF INTERNE DE PLANIFICATION — à utiliser puis vérifier, sans le citer ni le révéler:\n${String(plan.text).slice(0,5000)}`});
-          }
-        } catch (_) {}
+        try { const plan = await primary.complete({ messages:planningMessages(messages,meta), mode:'deep' }); if (plan?.text?.trim()) messages.splice(1,0,{role:'system',content:`BRIEF INTERNE DE PLANIFICATION — à utiliser puis vérifier, sans le citer ni le révéler:\n${String(plan.text).slice(0,5000)}`}); } catch (_) {}
       }
-
-      try {
-        const result = await primary.complete({ ...request, messages, mode });
-        if (result?.text?.trim()) return { ...result, cognitiveMeta:meta };
-      } catch (_) {}
+      try { const result = await primary.complete({ ...request, messages, mode }); if (result?.text?.trim()) return { ...result, cognitiveMeta:meta }; } catch (_) {}
       return { ...local.fallback(messages), degraded:true, cognitiveMeta:meta };
     }
   };
@@ -86,32 +62,20 @@ function createExaucee(options = {}) {
   const scheduler = options.scheduler || new PersistentScheduler({ file: path.join(root, 'sessions', sessionId, 'tasks.json') });
   const games = options.games || new GameRegistry();
   const gameMaster = options.gameMaster || new GameMaster({ file: path.join(root, 'sessions', sessionId, 'games.json') });
+  const tournamentDirector = options.tournamentDirector || new TournamentDirector({ file:path.join(root,'sessions',sessionId,'events.json'), scheduler });
   const dynamicCommands = options.dynamicCommands || new DynamicCommandRegistry({ file: path.join(root, 'sessions', sessionId, 'dynamic-commands.json') });
   const botKnowledge = options.botKnowledge || new BotKnowledge({
     getCommands: () => global.commands || commands || new Map(),
     getDynamicCommands: (sid, opts) => dynamicCommands.list(sid, opts),
-    capabilities: [
-      'conversation contextuelle et mémoire pertinente',
-      'routeur IA adaptatif FAST/NORMAL/DEEP/AGENT/DUAL/CRITICAL',
-      'planification interne pour demandes complexes',
-      'Groq GPT-OSS, Gemini et OpenRouter free avec fallback',
-      'commandes natives via CommandBridge','commandes dynamiques validées','rappels persistants',
-      'Game Master multi-parties','recherche web et analyse de liens','contrôles Exaucée owner','mémoire sociale de groupe'
-    ]
+    capabilities: ['conversation contextuelle et mémoire pertinente','routeur IA adaptatif FAST/NORMAL/DEEP/AGENT/DUAL/CRITICAL','planification interne pour demandes complexes','Groq GPT-OSS, Gemini et OpenRouter free avec fallback','commandes natives via CommandBridge','commandes dynamiques validées','rappels persistants','Game Master multi-parties','Mega GameMaster V3: événements, inscriptions, équipes, programmation, classements et récompenses','recherche web et analyse de liens','contrôles Exaucée owner','mémoire sociale de groupe']
   });
   const audit = options.audit || new DecisionLog({ root: path.join(root, 'audit', sessionId) });
   const recentExauceeMessageIds = new Set();
   if (!games.engines.has('quiz')) games.registerEngine(quizEngine);
   if (!games.engines.has('truth-or-dare')) games.registerEngine(truthOrDareEngine);
-  return {
-    sessionId, persona, config, memory, ai, cognition, research, botKnowledge, commandBridge, scheduler, games, gameMaster, dynamicCommands, audit,
+  return { sessionId, persona, config, memory, ai, cognition, research, botKnowledge, commandBridge, scheduler, games, gameMaster, tournamentDirector, dynamicCommands, audit,
     markOwnMessage(id) { if (!id) return; recentExauceeMessageIds.add(id); if (recentExauceeMessageIds.size > 1000) recentExauceeMessageIds.delete(recentExauceeMessageIds.values().next().value); },
-    inspectMessage({ msg, botJid, botJids = [], humanTakeover = false }) {
-      const decision = routeMessage({ msg, botJid, botJids, recentExauceeMessageIds, humanTakeover });
-      audit.write({ type: 'route', sessionId, messageId: msg?.key?.id, chatId: msg?.key?.remoteJid, decision });
-      return { ...decision, text: getText(msg?.message || {}) };
-    }
+    inspectMessage({ msg, botJid, botJids = [], humanTakeover = false }) { const decision = routeMessage({ msg, botJid, botJids, recentExauceeMessageIds, humanTakeover }); audit.write({ type: 'route', sessionId, messageId: msg?.key?.id, chatId: msg?.key?.remoteJid, decision }); return { ...decision, text: getText(msg?.message || {}) }; }
   };
 }
-
 module.exports = { createExaucee, safeSessionId, createGuaranteedBrain, shouldDeliberate, planningMessages };
