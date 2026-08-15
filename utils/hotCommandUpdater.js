@@ -8,6 +8,7 @@ const { loadCommands } = require('./commandLoader');
 
 const ACTIVE_COLLECTION = 'hot_command_active';
 const HISTORY_COLLECTION = 'hot_command_history';
+const ACTIVE_MANIFEST_ID = 'manifest';
 const MAX_BATCH = 25;
 const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_TOTAL_SOURCE_BYTES = 2 * 1024 * 1024;
@@ -85,8 +86,12 @@ function ensureSourceSafe(source, relativePath) {
 function atomicWrite(file, source) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.hot-write-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-  fs.writeFileSync(tmp, source, 'utf8');
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, source, 'utf8');
+    fs.renameSync(tmp, file);
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+  }
 }
 
 function snapshotFile(file) {
@@ -259,21 +264,32 @@ function validateCollisions(prepared, stableMap) {
   }
 }
 
-function activateOnDisk(prepared) {
-  const snapshots = new Map();
-  for (const item of prepared) {
-    snapshots.set(item.relativePath, snapshotFile(item.targetPath));
-    try { delete require.cache[require.resolve(item.targetPath)]; } catch (_) {}
-    if (item.action === 'delete') fs.rmSync(item.targetPath, { force: true });
-    else atomicWrite(item.targetPath, item.source);
-  }
-  return snapshots;
-}
-
 function rollbackDisk(prepared, snapshots) {
   for (const item of prepared) {
     const snapshot = snapshots.get(item.relativePath);
-    if (snapshot) restoreSnapshot(item.targetPath, snapshot);
+    if (!snapshot) continue;
+    try { restoreSnapshot(item.targetPath, snapshot); }
+    catch (error) {
+      console.error(`[hot-updater] rollback disque ${item.relativePath} échoué:`, error.message);
+    }
+  }
+}
+
+function activateOnDisk(prepared) {
+  const snapshots = new Map();
+  try {
+    for (const item of prepared) {
+      snapshots.set(item.relativePath, snapshotFile(item.targetPath));
+      try { delete require.cache[require.resolve(item.targetPath)]; } catch (_) {}
+      if (item.action === 'delete') fs.rmSync(item.targetPath, { force: true });
+      else atomicWrite(item.targetPath, item.source);
+    }
+    return snapshots;
+  } catch (error) {
+    rollbackDisk(prepared, snapshots);
+    const wrapped = new Error(`Écriture HOT interrompue, fichiers précédents restaurés: ${error.message}`);
+    wrapped.code = 'HOT_DISK_ACTIVATION_FAILED';
+    throw wrapped;
   }
 }
 
@@ -335,27 +351,43 @@ async function resolveDb(explicitDb) {
   return require('./mongoClient').getDb();
 }
 
+function cloneEntries(entries) {
+  const result = {};
+  for (const [key, value] of Object.entries(entries || {})) {
+    if (!key || !value || typeof value !== 'object') continue;
+    result[key] = { ...value };
+  }
+  return result;
+}
+
+async function readActiveManifest(db) {
+  const collection = db.collection(ACTIVE_COLLECTION);
+  if (typeof collection.findOne === 'function') {
+    const doc = await collection.findOne({ _id: ACTIVE_MANIFEST_ID });
+    if (doc?.entries && typeof doc.entries === 'object') return doc;
+  }
+  return { _id: ACTIVE_MANIFEST_ID, revision: 0, entries: {} };
+}
+
 async function persistRelease(db, prepared, { commitSha = null, actor = 'github-actions' } = {}) {
   const now = new Date();
-  const activeOps = prepared.map(item => ({
-    updateOne: {
-      filter: { _id: item.relativePath },
-      update: {
-        $set: {
-          path: item.relativePath,
-          action: item.action,
-          deleted: item.action === 'delete',
-          source: item.action === 'upsert' ? item.source : null,
-          sha256: item.hash,
-          metadata: item.metadata || null,
-          commitSha: commitSha || null,
-          updatedAt: now,
-          actor,
-        },
-      },
-      upsert: true,
-    },
-  }));
+  const current = await readActiveManifest(db);
+  const entries = cloneEntries(current.entries);
+
+  for (const item of prepared) {
+    entries[item.relativePath] = {
+      path: item.relativePath,
+      action: item.action,
+      deleted: item.action === 'delete',
+      source: item.action === 'upsert' ? item.source : null,
+      sha256: item.hash,
+      metadata: item.metadata || null,
+      commitSha: commitSha || null,
+      updatedAt: now,
+      actor,
+    };
+  }
+
   const historyDocs = prepared.map(item => ({
     path: item.relativePath,
     action: item.action,
@@ -366,10 +398,38 @@ async function persistRelease(db, prepared, { commitSha = null, actor = 'github-
     commitSha: commitSha || null,
     actor,
     createdAt: now,
+    previousRevision: Number(current.revision || 0),
   }));
 
-  await db.collection(ACTIVE_COLLECTION).bulkWrite(activeOps, { ordered: true });
+  // L'historique est écrit avant le manifeste : s'il échoue, la version
+  // active durable n'a pas encore bougé. Une entrée d'historique orpheline
+  // est acceptable; un manifeste partiellement mis à jour ne l'est pas.
   if (historyDocs.length) await db.collection(HISTORY_COLLECTION).insertMany(historyDocs, { ordered: true });
+
+  const nextRevision = Number(current.revision || 0) + 1;
+  const active = db.collection(ACTIVE_COLLECTION);
+  const filter = current.revision
+    ? { _id: ACTIVE_MANIFEST_ID, revision: Number(current.revision) }
+    : { _id: ACTIVE_MANIFEST_ID };
+  const update = {
+    $set: {
+      revision: nextRevision,
+      entries,
+      updatedAt: now,
+      commitSha: commitSha || null,
+      actor,
+    },
+    $setOnInsert: { createdAt: now },
+  };
+  const result = await active.updateOne(filter, update, { upsert: !current.revision });
+
+  if (current.revision && result?.matchedCount === 0) {
+    const error = new Error('Conflit de promotion HOT: le manifeste Mongo a changé pendant la mise à jour.');
+    error.code = 'HOT_MANIFEST_CONFLICT';
+    throw error;
+  }
+
+  return { revision: nextRevision, entries };
 }
 
 async function applyBatch(updates, options = {}) {
@@ -378,12 +438,12 @@ async function applyBatch(updates, options = {}) {
   const staged = stageAndValidate(prepared);
   const stableMap = options.commandMap || getStableCommandMap();
   validateCollisions(prepared, stableMap);
-  const oldMap = new Map(stableMap);
   let snapshots = null;
 
   try {
     const db = await resolveDb(options.db);
     snapshots = activateOnDisk(prepared);
+
     let activated;
     try {
       activated = loadActivatedCommands(prepared);
@@ -395,23 +455,28 @@ async function applyBatch(updates, options = {}) {
     }
 
     const nextMap = buildNextCommandMap(stableMap, prepared, activated);
-    commitCommandMap(stableMap, nextMap);
 
+    let persisted;
     try {
-      await persistRelease(db, prepared, {
+      // Promotion durable AVANT la bascule de la Map. Tant que Mongo n'a pas
+      // confirmé le manifeste complet, le handler continue d'utiliser
+      // exactement les anciennes commandes déjà en mémoire.
+      persisted = await persistRelease(db, prepared, {
         commitSha: options.commitSha,
         actor: options.actor || 'github-actions',
       });
     } catch (error) {
       rollbackDisk(prepared, snapshots);
-      commitCommandMap(stableMap, oldMap);
-      const wrapped = new Error(`Persistance HOT échouée, ancienne version restaurée: ${error.message}`);
-      wrapped.code = 'HOT_PERSIST_FAILED';
+      const wrapped = new Error(`Persistance HOT échouée, ancienne version conservée: ${error.message}`);
+      wrapped.code = error.code || 'HOT_PERSIST_FAILED';
       throw wrapped;
     }
 
+    commitCommandMap(stableMap, nextMap);
+
     return {
       success: true,
+      revision: persisted.revision,
       commitSha: options.commitSha || null,
       commandKeys: stableMap.size,
       updates: prepared.map(item => ({
@@ -436,19 +501,27 @@ function enqueueBatch(updates, options = {}) {
 
 async function hydrateActiveCommands(options = {}) {
   const db = await resolveDb(options.db);
-  const docs = await db.collection(ACTIVE_COLLECTION).find({}).sort({ _id: 1 }).toArray();
-  if (!docs.length) return { success: true, restored: 0 };
+  const manifest = await readActiveManifest(db);
+  const docs = Object.values(manifest.entries || {}).filter(Boolean);
+  if (!docs.length) return { success: true, restored: 0, revision: Number(manifest.revision || 0) };
 
   const updates = docs.map(doc => ({
-    path: doc.path || doc._id,
+    path: doc.path,
     action: doc.deleted ? 'delete' : 'upsert',
     source: doc.source,
   }));
 
+  // Au démarrage on ne doit pas recréer une release Mongo : on rejoue le
+  // manifeste déjà validé uniquement sur le disque éphémère et la Map.
   const noopDb = {
-    collection() {
+    collection(name) {
+      if (name === ACTIVE_COLLECTION) {
+        return {
+          async findOne() { return { _id: ACTIVE_MANIFEST_ID, revision: 0, entries: {} }; },
+          async updateOne() { return { matchedCount: 1, upsertedCount: 0 }; },
+        };
+      }
       return {
-        async bulkWrite() { return { ok: 1 }; },
         async insertMany() { return { acknowledged: true }; },
       };
     },
@@ -461,33 +534,35 @@ async function hydrateActiveCommands(options = {}) {
       actor: 'startup-hydration',
       commitSha: null,
     });
-    return { success: true, restored: result.updates.length };
+    return { success: true, restored: result.updates.length, revision: Number(manifest.revision || 0) };
   } catch (error) {
     console.error('[hot-updater] restauration Mongo rejetée, commandes de base conservées:', error.message);
-    return { success: false, restored: 0, error: error.message };
+    return { success: false, restored: 0, revision: Number(manifest.revision || 0), error: error.message };
   }
 }
 
 async function getHotUpdateStatus(options = {}) {
   const db = await resolveDb(options.db);
-  const docs = await db.collection(ACTIVE_COLLECTION)
-    .find({}, { projection: { source: 0 } })
-    .sort({ _id: 1 })
-    .toArray();
-  return docs.map(doc => ({
-    path: doc.path || doc._id,
-    action: doc.action,
-    deleted: !!doc.deleted,
-    sha256: doc.sha256 || null,
-    commitSha: doc.commitSha || null,
-    updatedAt: doc.updatedAt || null,
-    commands: doc.metadata?.commands || [],
-  }));
+  const manifest = await readActiveManifest(db);
+  const active = Object.values(manifest.entries || {})
+    .filter(Boolean)
+    .map(doc => ({
+      path: doc.path,
+      action: doc.action,
+      deleted: !!doc.deleted,
+      sha256: doc.sha256 || null,
+      commitSha: doc.commitSha || null,
+      updatedAt: doc.updatedAt || null,
+      commands: doc.metadata?.commands || [],
+    }))
+    .sort((a, b) => String(a.path).localeCompare(String(b.path)));
+  return { revision: Number(manifest.revision || 0), active };
 }
 
 module.exports = {
   ACTIVE_COLLECTION,
   HISTORY_COLLECTION,
+  ACTIVE_MANIFEST_ID,
   MAX_BATCH,
   MAX_SOURCE_BYTES,
   isAuthorizedHotUpdate,
@@ -504,5 +579,9 @@ module.exports = {
     buildNextCommandMap,
     commitCommandMap,
     runValidator,
+    activateOnDisk,
+    rollbackDisk,
+    readActiveManifest,
+    persistRelease,
   },
 };
