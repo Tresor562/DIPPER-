@@ -11,7 +11,7 @@ const { PersistentScheduler } = require('../ai_chat/scheduler/persistentSchedule
 const { DynamicCommandRegistry } = require('../ai_chat/dynamic/registry');
 const { GameMaster } = require('../ai_chat/games/gameMaster');
 const { createExaucee, safeSessionId } = require('../ai_chat/core');
-const { sanitizeModelText } = require('../ai_chat/runtime');
+const { sanitizeModelText, sendExaucee } = require('../ai_chat/runtime');
 
 function makeTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'exaucee-'));
@@ -56,6 +56,39 @@ test('nom explicite Exaucée reprend malgré le takeover humain', () => {
     humanTakeover: true
   });
   assert.equal(result.shouldRespond, true);
+});
+
+test('Exaucée en privé envoie sans quoted pour éviter les messages silencieux Baileys', async () => {
+  const calls = [];
+  const sock = {
+    async sendMessage(...args) {
+      calls.push(args);
+      return { key: { id: 'private-1' } };
+    }
+  };
+  const exaucee = { markOwnMessage() {} };
+  const msg = message({ chat: '22911111111@s.whatsapp.net', text: 'salut' });
+  await sendExaucee(sock, exaucee, msg.key.remoteJid, msg, 'Bonjour 🌸');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].length, 2);
+  assert.deepEqual(calls[0][1], { text: 'Bonjour 🌸' });
+});
+
+test('Exaucée en groupe conserve quoted et retombe sans quoted si nécessaire', async () => {
+  const calls = [];
+  const sock = {
+    async sendMessage(...args) {
+      calls.push(args);
+      if (calls.length === 1) throw new Error('quoted rejected');
+      return { key: { id: 'group-1' } };
+    }
+  };
+  const exaucee = { markOwnMessage() {} };
+  const msg = message({ chat: '123@g.us', text: 'salut' });
+  await sendExaucee(sock, exaucee, msg.key.remoteJid, msg, 'Bonjour groupe');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0][2], { quoted: msg });
+  assert.equal(calls[1].length, 2);
 });
 
 test('scheduler persiste puis exécute une tâche due', async () => {
