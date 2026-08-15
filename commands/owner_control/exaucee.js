@@ -2,6 +2,7 @@
 
 const {
   getExauceeStatus,
+  getProviderStatus,
   setExauceeSettings,
   resetExauceeSettings,
   restartExaucee
@@ -22,6 +23,7 @@ function renderStatus(settings) {
     '*.exaucee on* — activer',
     '*.exaucee off* — désactiver',
     '*.exaucee status* — état actuel',
+    '*.exaucee providers* — cerveaux IA réellement configurés',
     '*.exaucee restart* — relancer le runtime',
     '*.exaucee onlytag* — basculer le mode mention obligatoire en groupe',
     '*.exaucee owneronly* — basculer le mode réservé aux owners',
@@ -29,6 +31,24 @@ function renderStatus(settings) {
     '*.exaucee private on|off* — autoriser/interdire les privés',
     '*.exaucee auto* — mode conversationnel normal',
     '*.exaucee reset* — réglages par défaut'
+  ].join('\n');
+}
+
+function renderProviders(status = {}) {
+  const p = status.providers || {};
+  const rows = Object.entries(p).map(([name, cfg]) => {
+    const state = cfg.configured ? (cfg.healthy === false ? '🟠 cooldown' : '🟢 prêt') : '⚪ non configuré';
+    return `• ${name} — ${state}${cfg.model ? ` — ${cfg.model}` : ''}`;
+  });
+  return [
+    '🧠 *EXAUCÉE — CERVEAUX IA*',
+    '',
+    ...rows,
+    '',
+    'Modes : FAST / NORMAL / DEEP / AGENT / DUAL / CRITICAL',
+    'Politique : aucun fallback payant automatique.',
+    '',
+    'ℹ️ Groq, Gemini et OpenRouter nécessitent leurs clés dans les variables Render. Les clés ne sont jamais affichées ici.'
   ].join('\n');
 }
 
@@ -44,7 +64,7 @@ module.exports = {
   aliases: ['exa', 'exauceectl'],
   category: '👑 Owner',
   description: 'Contrôle le runtime Exaucée depuis WhatsApp',
-  usage: '.exaucee <on|off|status|restart|onlytag|owneronly|group|private|auto|reset>',
+  usage: '.exaucee <on|off|status|providers|restart|onlytag|owneronly|group|private|auto|reset>',
 
   async execute(sock, msg, args, extra) {
     const allowed = Boolean(extra?.isOwner || extra?.isSuperMe || extra?.isMe || msg?.key?.fromMe);
@@ -62,6 +82,10 @@ module.exports = {
     if (action === 'off') {
       settings = setExauceeSettings({ enabled: false });
       return extra.reply(`🌸 Exaucée est maintenant *désactivée*.\n\n${renderStatus(settings)}`);
+    }
+
+    if (action === 'providers' || action === 'brains' || action === 'ai') {
+      return extra.reply(renderProviders(getProviderStatus()));
     }
 
     if (action === 'restart') {
