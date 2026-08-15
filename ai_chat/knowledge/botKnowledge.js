@@ -59,6 +59,8 @@ class BotKnowledge {
 
   isBotQuestion(text=''){
     const t=norm(text);
+    if (/^(?:exauce[e]?\s*)?(?:execute|exécute|lance|utilise|fais)\s+(?:la\s+)?commande\b/.test(t)) return false;
+    if (/\bbranchee?\s+(?:a|sur)\s+(?:quel|quelle)\s+bot\b|\b(?:quel|quelle)\s+bot\b/.test(t)) return false;
     return /\b(bot|dipper|the big dipper|commande|commandes|menu|alias|owner|admin|groupe|fonction|fonctionnalite|peut il|peut-elle|sait faire)\b/.test(t);
   }
 
