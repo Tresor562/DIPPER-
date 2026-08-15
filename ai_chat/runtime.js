@@ -108,6 +108,14 @@ function ensureScheduler(exaucee, sock) {
   });
 }
 
+function bootstrapExaucee({ sock, sessionId = sessionContext.DEFAULT_SESSION_ID } = {}) {
+  if (!sock) return false;
+  const exaucee = getInstance(sessionId || sessionContext.DEFAULT_SESSION_ID);
+  if (!exaucee.config.enabled) return false;
+  ensureScheduler(exaucee, sock);
+  return true;
+}
+
 function cleanGameText(text) {
   return String(text || '')
     .replace(/^\s*(?:exauc[eé]e|exa)\s*[,!:;-]?\s*/i, '')
@@ -216,7 +224,7 @@ async function executeDynamic(exaucee, sessionId, text, chatId, sock, msg) {
 async function handleExauceeDynamicCommand({ sock, msg, commandName } = {}) {
   const sessionId = sessionContext.getCurrentSessionId();
   const exaucee = getInstance(sessionId);
-  if (!exaucee.config.enabled || !sock || !msg?.message || !msg?.key?.remoteJid || msg.key.fromMe) return false;
+  if (!exaucee.config.enabled || !sock || !msg?.message || !msg?.key?.remoteJid) return false;
   ensureScheduler(exaucee, sock);
   return executeDynamic(exaucee, sessionId, commandName, msg.key.remoteJid, sock, msg);
 }
@@ -327,6 +335,7 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
 module.exports = {
   handleExauceeMessage,
   handleExauceeDynamicCommand,
+  bootstrapExaucee,
   getInstance,
   hasHumanTakeover,
   rememberHumanTakeover,
