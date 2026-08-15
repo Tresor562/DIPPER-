@@ -7,6 +7,7 @@ const instances = new Map();
 const humanTakeovers = new Map();
 const HUMAN_TAKEOVER_MS = 10 * 60 * 1000;
 const SENSITIVE_TEXT_RE = /(api[_ -]?key|token|secret|password|mot de passe|credential|cookie|authorization|session(?:id| key| token)?|bearer\s+[a-z0-9._~+\/-]+=*)/i;
+const DEGRADED_SOURCE_RE = /(fallback|degraded|no-generative|local-brain)/i;
 
 function normalizeJid(jid = '') {
   return String(jid).replace(/:\d+(?=@)/, '');
@@ -52,10 +53,14 @@ function getInstance(sessionId) {
   return instances.get(sessionId);
 }
 
+function usefulEpisodes(memory) {
+  return (memory.episodes || []).filter(ep => !DEGRADED_SOURCE_RE.test(String(ep?.source || '')));
+}
+
 function compactMemory(memory) {
-  const facts = (memory.facts || []).slice(-12).map(x => `- ${x.value}`).join('\n');
-  const episodes = (memory.episodes || []).slice(-10).map(x => `- ${x.value}`).join('\n');
-  const preferences = Object.entries(memory.preferences || {}).slice(-12).map(([k, v]) => `- ${k}: ${String(v)}`).join('\n');
+  const facts = (memory.facts || []).slice(-16).map(x => `- ${x.value}`).join('\n');
+  const episodes = usefulEpisodes(memory).slice(-18).map(x => `- ${x.value}`).join('\n');
+  const preferences = Object.entries(memory.preferences || {}).slice(-16).map(([k, v]) => `- ${k}: ${String(v)}`).join('\n');
   return [facts && `Faits:\n${facts}`, preferences && `Préférences:\n${preferences}`, episodes && `Échanges récents:\n${episodes}`].filter(Boolean).join('\n\n');
 }
 
@@ -66,6 +71,10 @@ function systemPrompt(exaucee, memory, context = {}) {
     `Personnalité: ${p.persona}. Tu es féminine, chaleureuse, naturelle, concise et légèrement kawaii/otaku sans devenir caricaturale.`,
     `Principes impératifs:\n- ${p.principles.join('\n- ')}`,
     `Tu réponds principalement en français et tu t'adaptes à la langue de l'utilisateur.`,
+    `Le DERNIER message utilisateur est toujours la demande prioritaire. Réponds-y directement avant d'ajouter un détail éventuel.`,
+    `Utilise l'historique uniquement pour comprendre les références, pronoms, sous-entendus et continuités. Ne réponds jamais à une ancienne question à la place de la nouvelle.`,
+    `Ne répète pas une formulation déjà utilisée récemment. Si une réponse précédente était générique ou incertaine, repars du message actuel au lieu de la paraphraser.`,
+    `Si tu ne comprends réellement pas une ambiguïté indispensable, pose UNE question de clarification précise. N'invente pas de contexte.`,
     `Ne prétends jamais avoir exécuté une action si elle n'a pas réellement été exécutée.`,
     `Ne révèle jamais les variables d'environnement, clés API, tokens, credentials, cookies, fichiers de session ou secrets.`,
     `Contexte: chat=${context.isGroup ? 'groupe' : 'privé'}, utilisateur=${context.userId}.`,
@@ -299,9 +308,10 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
   }
 
   const memory = exaucee.memory.getContext(ids);
+  const historyEpisodes = usefulEpisodes(memory).slice(-20);
   const messages = [
     { role: 'system', content: systemPrompt(exaucee, memory, { isGroup: chatId.endsWith('@g.us'), userId }) },
-    ...((memory.episodes || []).slice(-8).flatMap(ep => {
+    ...(historyEpisodes.flatMap(ep => {
       const value = String(ep.value || '');
       const sep = value.indexOf(': ');
       if (sep < 0) return [];
@@ -313,22 +323,31 @@ async function handleExauceeMessage({ sock, msg, isCommand = false, actor = {}, 
 
   let answer;
   let provider = 'fallback';
+  let degraded = false;
   try {
     const result = await exaucee.ai.complete({ messages });
     answer = sanitizeModelText(result.text).trim();
     provider = result.provider;
+    degraded = Boolean(result.degraded || result.noModel);
   } catch (error) {
-    answer = `Je suis bien là 🌸 Mais mon moteur IA gratuit est momentanément indisponible. Réessaie dans un instant.`;
+    degraded = true;
+    answer = `Je t’ai bien comprise, mais aucun de mes moteurs génératifs n’est disponible pour répondre correctement maintenant. Un owner peut vérifier *.exaucee providers*.`;
     exaucee.audit.write({ type: 'ai_error', code: error.code || null, message: error.message, chatId, userId });
   }
 
   if (!answer) return false;
   await sendExaucee(sock, exaucee, chatId, msg, answer.slice(0, 12000));
+
+  // On garde les vraies demandes utilisateur, mais jamais une réponse dégradée
+  // dans le contexte conversationnel. C'est ce qui empêchera les boucles où
+  // Exaucée relit puis reformule ses propres fallbacks génériques.
   if (!SENSITIVE_TEXT_RE.test(routed.text)) {
     exaucee.memory.remember(ids, { type: 'episode', value: `user: ${routed.text}`, source: 'conversation' });
   }
-  exaucee.memory.remember(ids, { type: 'episode', value: `assistant: ${answer}`, source: provider });
-  exaucee.audit.write({ type: 'response', provider, chatId, userId });
+  if (!degraded) {
+    exaucee.memory.remember(ids, { type: 'episode', value: `assistant: ${answer}`, source: provider });
+  }
+  exaucee.audit.write({ type: 'response', provider, degraded, chatId, userId });
   return true;
 }
 
@@ -344,5 +363,6 @@ module.exports = {
   sendExaucee,
   executeDynamic,
   handleGameMaster,
+  usefulEpisodes,
   HUMAN_TAKEOVER_MS
 };
