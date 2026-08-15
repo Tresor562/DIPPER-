@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { validateWorkflow, normalizeName } = require('./commandBuilder');
 
 class DynamicCommandRegistry {
   constructor({ file = path.join(process.cwd(), 'data', 'exaucee', 'dynamic-commands.json') } = {}) {
@@ -11,14 +12,17 @@ class DynamicCommandRegistry {
   }
 
   _key(sessionId, name) {
-    return `${sessionId || 'default'}:${String(name || '').toLowerCase()}`;
+    return `${sessionId || 'default'}:${normalizeName(name)}`;
   }
 
   _load() {
     try {
       const rows = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       for (const record of Array.isArray(rows) ? rows : []) {
-        if (record?.name) this.store.set(this._key(record.sessionId, record.name), record);
+        if (!record?.name) continue;
+        const validation = validateWorkflow(record.workflow);
+        if (!validation.ok) continue;
+        this.store.set(this._key(record.sessionId, record.name), record);
       }
     } catch (_) {}
   }
@@ -31,20 +35,50 @@ class DynamicCommandRegistry {
   }
 
   define(sessionId, spec) {
-    if (!spec?.name || !spec?.workflow) throw new Error('Commande dynamique invalide');
-    const key = this._key(sessionId, spec.name);
+    const name = normalizeName(spec?.name);
+    if (!name || !spec?.workflow) throw new Error('Commande dynamique invalide');
+    const validation = validateWorkflow(spec.workflow);
+    if (!validation.ok) throw new Error(`Workflow dynamique invalide: ${validation.errors.join(', ')}`);
+
+    const key = this._key(sessionId, name);
     const previous = this.store.get(key);
+    const history = Array.isArray(previous?.history) ? previous.history.slice(-4) : [];
+    if (previous) {
+      history.push({
+        version: previous.version,
+        workflow: structuredClone(previous.workflow),
+        groupId: previous.groupId || null,
+        updatedAt: previous.updatedAt
+      });
+    }
+
     const record = {
       sessionId: sessionId || 'default',
-      name: String(spec.name).toLowerCase(),
+      name,
       workflow: structuredClone(spec.workflow),
       groupId: spec.groupId || null,
       expiresAt: spec.expiresAt || null,
       version: Number(previous?.version || 0) + 1,
+      history: history.slice(-5),
       createdAt: previous?.createdAt || Date.now(),
       updatedAt: Date.now()
     };
     this.store.set(key, record);
+    this._save();
+    return structuredClone(record);
+  }
+
+  rollback(sessionId, name) {
+    const key = this._key(sessionId, name);
+    const record = this.store.get(key);
+    if (!record?.history?.length) return null;
+    const history = [...record.history];
+    const previous = history.pop();
+    record.history = history;
+    record.workflow = structuredClone(previous.workflow);
+    record.groupId = previous.groupId || null;
+    record.version = Number(record.version || 1) + 1;
+    record.updatedAt = Date.now();
     this._save();
     return structuredClone(record);
   }
