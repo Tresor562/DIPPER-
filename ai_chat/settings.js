@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { safeSessionId } = require('./core');
 
 const DEFAULTS = Object.freeze({
   enabled: true,
@@ -11,6 +10,8 @@ const DEFAULTS = Object.freeze({
   groups: true,
   private: true
 });
+
+const safeSessionId = value => String(value || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'default';
 
 function fileFor(sessionId) {
   return path.join(process.cwd(), 'data', 'exaucee', 'sessions', safeSessionId(sessionId), 'settings.json');
@@ -43,4 +44,4 @@ function resetSettings(sessionId) {
   return loadSettings(sessionId);
 }
 
-module.exports = { DEFAULTS, loadSettings, saveSettings, resetSettings, fileFor };
+module.exports = { DEFAULTS, loadSettings, saveSettings, resetSettings, fileFor, safeSessionId };
