@@ -7,14 +7,19 @@ on:
       - 'commands/**/*.js'
       - 'utils/hotCommandUpdater.js'
       - 'utils/hotOidcAuth.js'
+      - 'utils/hotReleaseCrypto.js'
+      - 'utils/hotReleasePoller.js'
       - 'scripts/install-hot-command-updater.js'
       - 'scripts/install-hot-oidc-auth.js'
       - 'scripts/validate-hot-command.js'
       - 'scripts/publish-hot-commands.js'
       - 'scripts/publish-hot-commands-oidc.js'
+      - 'scripts/build-encrypted-hot-release.js'
       - 'tests/hot-command-updater.test.js'
       - 'tests/hot-oidc-auth.test.js'
       - 'tests/hot-installer.test.js'
+      - 'tests/hot-release-crypto.test.js'
+      - 'tests/hot-release-poller.test.js'
       - 'package.json'
       - '.github/workflows/hot-command-updates.yml'
   pull_request:
@@ -43,7 +48,7 @@ jobs:
           node-version: '20'
       - name: Install production dependencies
         run: npm install --omit=dev
-      - name: Test updater atomics, rollback, installer and OIDC
+      - name: Test updater, encrypted pull, rollback and OIDC
         run: npm run test:hot-updater
       - name: Install runtime hooks
         run: |
@@ -59,15 +64,18 @@ jobs:
           node --check api/server.js
           node --check utils/hotCommandUpdater.js
           node --check utils/hotOidcAuth.js
+          node --check utils/hotReleaseCrypto.js
+          node --check utils/hotReleasePoller.js
           node --check scripts/validate-hot-command.js
           node --check scripts/publish-hot-commands.js
           node --check scripts/publish-hot-commands-oidc.js
+          node --check scripts/build-encrypted-hot-release.js
       - name: Validate all static commands
         run: npm run validate:commands
 
-  publish:
-    name: Publish command-only commit without Render restart
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  publish-push-transport:
+    name: Optional OIDC push transport
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HOT_PUSH_TRANSPORT_ENABLED == 'true'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
