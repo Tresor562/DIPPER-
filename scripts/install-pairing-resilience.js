@@ -14,12 +14,10 @@ function replaceOnce(src, search, replacement, marker, label) {
     console.log(`[pairing-resilience] ${label} déjà appliqué`);
     return src;
   }
-
   const count = src.split(search).length - 1;
   if (count !== 1) {
     throw new Error(`[pairing-resilience] ${label}: attendu 1 occurrence, trouvé ${count}`);
   }
-
   console.log(`[pairing-resilience] ${label} appliqué`);
   return src.replace(search, replacement);
 }
@@ -31,6 +29,37 @@ function nodeCheck(file) {
       `[pairing-resilience] syntaxe invalide ${path.relative(ROOT, file)}: ${result.stderr || result.stdout}`
     );
   }
+}
+
+function markExistingStableWaVersion(session) {
+  if (session.includes('[PAIRING LIVE WA VERSION]')) return session;
+
+  // Le wrapper Render applique stability-patch.js AVANT ce script.
+  // Ce patch peut déjà avoir remplacé getBaileysVersion() par
+  // fetchLatestWaWebVersion(). C'est un état valide : on le reconnaît
+  // explicitement au lieu d'exiger l'ancienne implémentation exacte.
+  if (session.includes('[SessionManager] 🌐 WA Web version:')) {
+    const anchor = 'let _baileysVersion = null;';
+    const count = session.split(anchor).length - 1;
+    if (count !== 1) {
+      throw new Error(
+        `[pairing-resilience] version WA dynamique préexistante: ancre attendue 1 fois, trouvée ${count}`
+      );
+    }
+    console.log('[pairing-resilience] version WhatsApp Web live multi-session déjà fournie par stability-patch');
+    return session.replace(
+      anchor,
+      `// [PAIRING LIVE WA VERSION] compatible stability-patch + résolveur live\n${anchor}`
+    );
+  }
+
+  return replaceOnce(
+    session,
+    "    const { version } = await fetchLatestBaileysVersion();\n    _baileysVersion = version;",
+    "    // [PAIRING LIVE WA VERSION] Toujours préférer la version réellement servie par web.whatsapp.com.\n    const version = await getCurrentWhatsAppWebVersion();\n    _baileysVersion = version;",
+    '[PAIRING LIVE WA VERSION]',
+    'version WhatsApp Web live multi-session'
+  );
 }
 
 function install() {
@@ -73,13 +102,7 @@ function install() {
     'source version WA live dans sessionManager.js'
   );
 
-  session = replaceOnce(
-    session,
-    "    const { version } = await fetchLatestBaileysVersion();\n    _baileysVersion = version;",
-    "    // [PAIRING LIVE WA VERSION] Toujours préférer la version réellement servie par web.whatsapp.com.\n    const version = await getCurrentWhatsAppWebVersion();\n    _baileysVersion = version;",
-    '[PAIRING LIVE WA VERSION]',
-    'version WhatsApp Web live multi-session'
-  );
+  session = markExistingStableWaVersion(session);
 
   session = replaceOnce(
     session,
@@ -201,14 +224,20 @@ function install() {
   if (!finalIndex.includes('getCurrentWhatsAppWebVersion()')) {
     throw new Error('[pairing-resilience] index.js utilise encore une version WA non résolue');
   }
-  if (!finalSession.includes('const version = await getCurrentWhatsAppWebVersion();')) {
-    throw new Error('[pairing-resilience] sessionManager.js utilise encore une version WA non résolue');
+
+  const sessionUsesLiveVersion =
+    finalSession.includes('const version = await getCurrentWhatsAppWebVersion();')
+    || finalSession.includes('[SessionManager] 🌐 WA Web version:');
+
+  if (!sessionUsesLiveVersion) {
+    throw new Error('[pairing-resilience] sessionManager.js n’utilise aucune source WA Web live');
   }
+
   if (!finalSession.includes('opts.maxAttempts ?? 3')) {
     throw new Error('[pairing-resilience] retries pairing absents');
   }
 
-  console.log('[pairing-resilience] ✅ version WA live + préparation socket + retries transitoires installés');
+  console.log('[pairing-resilience] ✅ compatible wrapper Render + version WA live + préparation socket + retries transitoires');
 }
 
 if (require.main === module) install();
