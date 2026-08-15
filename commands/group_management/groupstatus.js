@@ -234,6 +234,22 @@ async function postRealGroupStatus(sock, groupJid, sourceMessage, overrideCaptio
   };
 }
 
+async function reactToCommand(sock, groupJid, key, emoji) {
+  if (!key) return false;
+  try {
+    await sock.sendMessage(groupJid, {
+      react: {
+        text: emoji,
+        key,
+      },
+    });
+    return true;
+  } catch (error) {
+    console.warn('[gstatus] réaction impossible:', error?.message || String(error));
+    return false;
+  }
+}
+
 module.exports = {
   name: 'gstatus',
   aliases: ['groupstatus', 'gs', 'gcstatus', 'groupestatuts', 'togstatus', 'swgc'],
@@ -281,9 +297,12 @@ module.exports = {
       );
     }
 
+    await reactToCommand(sock, groupJid, msg?.key, '⏳');
+
     try {
-      const posted = await postRealGroupStatus(sock, groupJid, source, quoted ? suppliedText : '');
-      return extra.reply(`✅ Statut de groupe ${posted.type} envoyé à WhatsApp.`);
+      await postRealGroupStatus(sock, groupJid, source, quoted ? suppliedText : '');
+      await reactToCommand(sock, groupJid, msg?.key, '✅');
+      return;
     } catch (error) {
       const code =
         error?.output?.statusCode ||
@@ -298,9 +317,8 @@ module.exports = {
         error: error?.stack || error,
       });
 
-      return extra.reply(
-        `❌ Échec du statut de groupe${code ? ` [${code}]` : ''}: ${error?.message || String(error)}`
-      );
+      await reactToCommand(sock, groupJid, msg?.key, '❌');
+      return;
     }
   },
 
@@ -312,5 +330,6 @@ module.exports = {
     findQuotedMessage,
     buildStatusPayload,
     postRealGroupStatus,
+    reactToCommand,
   },
 };
