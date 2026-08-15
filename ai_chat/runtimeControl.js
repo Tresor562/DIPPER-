@@ -71,8 +71,6 @@ async function handleExauceeMessage(args = {}) {
   const owner = Boolean(args.actor?.isOwner || args.actor?.isSuperMe || args.msg?.key?.fromMe);
   const control = naturalControl(messageText(args.msg));
 
-  // Les ordres naturels Owner restent accessibles même quand Exaucée est OFF,
-  // afin de pouvoir la rallumer sans passer par Render.
   if (control && owner) {
     if (control === 'on') {
       setExauceeSettings({ enabled: true }, sessionId);
@@ -102,10 +100,7 @@ async function handleExauceeMessage(args = {}) {
     }
   }
 
-  // OFF est absolu : aucune conversation, jeu, mémoire ou action dynamique.
   if (!settings.enabled) return false;
-
-  // Deux instances Exaucée dans le même groupe ne doivent jamais se répondre.
   if (signedByAnotherExaucee(args.msg)) return false;
 
   const chatId = args.msg?.key?.remoteJid || '';
@@ -137,6 +132,12 @@ function bootstrapExaucee(args = {}) {
 
 function getExauceeStatus(sessionId = currentSessionId()) { return loadSettings(sessionId); }
 
+function getProviderStatus(sessionId = currentSessionId()) {
+  const { instance } = refreshInstance(sessionId);
+  const status = instance.ai?.providerStatus?.();
+  return status || { policy:{ maxCostPerRequest:0, maxDailyCost:0, allowPaidProviders:false }, providers:{} };
+}
+
 function setExauceeSettings(patch, sessionId = currentSessionId()) {
   const settings = saveSettings(sessionId, patch);
   const instance = runtime.getInstance(sessionId);
@@ -164,6 +165,7 @@ module.exports = {
   handleExauceeDynamicCommand,
   bootstrapExaucee,
   getExauceeStatus,
+  getProviderStatus,
   setExauceeSettings,
   resetExauceeSettings,
   restartExaucee,
