@@ -25,19 +25,36 @@ function detectLanguage(text = '') {
 function detectTone(text = '') {
   const t = normalize(text);
   if (/\b(triste|mal|deprime|pleure|fatigue|angoisse|peur|seul|seule)\b/.test(t)) return 'supportive';
-  if (/\b(mdr|lol|ptdr|😂|🤣|haha|hahaha)\b/.test(String(text))) return 'playful';
+  if (/\b(mdr|lol|ptdr|haha|hahaha)\b/.test(t) || /😂|🤣/.test(String(text))) return 'playful';
   if (/!{2,}|\b(vite|urgent|maintenant|immediatement)\b/.test(t)) return 'urgent';
-  if (/\b(explique|detaille|analyse|pourquoi|comment ca marche)\b/.test(t)) return 'analytical';
+  if (/\b(explique|detaille|analyse|pourquoi|comment ca marche|compare|demontre)\b/.test(t)) return 'analytical';
   return 'natural';
 }
 
 function detectIntent(text = '') {
   const t = normalize(text);
   if (/\b(rappelle|rappel|souviens|memorise|retiens)\b/.test(t)) return 'memory_or_schedule';
-  if (/\b(cree|fais|execute|lance|active|desactive|supprime|ajoute)\b/.test(t)) return 'action';
-  if (/\b(explique|pourquoi|comment|c'est quoi|qu'est ce que|analyse)\b/.test(t)) return 'question';
+  if (/\b(cree|fais|execute|lance|active|desactive|supprime|ajoute|programme|planifie|organise)\b/.test(t)) return 'action';
+  if (/\b(explique|pourquoi|comment|c'est quoi|qu'est ce que|qui est|analyse|compare|verifie)\b/.test(t)) return 'question';
   if (/^(oui|non|ok|d'accord|vas[- ]y|continue|le premier|le deuxieme|celui[- ]la|elle|lui|ca|ça)\b/.test(t)) return 'continuation';
   return 'conversation';
+}
+
+function detectReasoningMode(text='', intent='conversation') {
+  const t = normalize(text);
+  if (/^(salut|coucou|yo|hey|hello|bonjour|bonsoir|merci|mdr|lol)[ !?.]*$/.test(t)) return 'fast';
+  if (/\b(critique|irreversible|dangereux|sensible|verifie deux fois|double verification)\b/.test(t)) return 'critical';
+  if (/\b(compare|recoupe|deux avis|seconde analyse|plusieurs hypotheses|contradiction)\b/.test(t)) return 'dual';
+  if (intent === 'action') return 'agent';
+  if (/\b(analyse|raisonne|reflechis|complexe|approfondi|en profondeur|plan detaille|diagnostique|demontre)\b/.test(t) || t.length > 700) return 'deep';
+  return 'normal';
+}
+
+function ambiguitySignals(text='') {
+  const t = normalize(text);
+  const pronounOnly = /^(lui|elle|eux|elles|ca|ça|celui[- ]la|celle[- ]la|le premier|le deuxieme)[ ?!.]*$/.test(t);
+  const vagueAction = /\b(fais|execute|lance|supprime|change|modifie)\s+(ca|ça|le|la|lui|elle)\b/.test(t);
+  return { pronounOnly, vagueAction, likelyAmbiguous: pronounOnly || vagueAction };
 }
 
 function extractFacts(text = '') {
@@ -56,7 +73,7 @@ function extractFacts(text = '') {
   return [...new Set(out)].slice(0, 4);
 }
 
-function recentTurns(memory, limit = 18) {
+function recentTurns(memory, limit = 24) {
   return (memory?.episodes || []).slice(-limit).flatMap(ep => {
     const value = String(ep.value || '');
     const sep = value.indexOf(': ');
@@ -69,11 +86,12 @@ function recentTurns(memory, limit = 18) {
 
 function resolveShortReference(text, memory) {
   const t = normalize(text);
-  if (!/^(oui|non|ok|d'accord|vas[- ]y|continue|encore|le premier|le deuxieme|le 1|le 2|elle|lui|ca|ça|fais[- ]le|fais ca)[.!? ]*$/.test(t)) return text;
-  const turns = recentTurns(memory, 6);
+  if (!/^(oui|non|ok|d'accord|vas[- ]y|continue|encore|le premier|le deuxieme|le 1|le 2|elle|lui|ca|ça|celui[- ]la|celle[- ]la|fais[- ]le|fais ca)[.!? ]*$/.test(t)) return text;
+  const turns = recentTurns(memory, 8);
   const lastAssistant = [...turns].reverse().find(x => x.role === 'assistant')?.content;
-  if (!lastAssistant) return text;
-  return `${text}\n\n[Contexte implicite: cette réponse courte fait suite à: ${lastAssistant.slice(0, 700)}]`;
+  const lastUser = [...turns].reverse().find(x => x.role === 'user')?.content;
+  if (!lastAssistant && !lastUser) return text;
+  return `${text}\n\n[Contexte implicite à résoudre: message utilisateur précédent=${String(lastUser||'').slice(0,500)} ; réponse précédente d’Exaucée=${String(lastAssistant||'').slice(0,700)}]`;
 }
 
 function styleInstruction(tone, language, userText) {
@@ -103,15 +121,29 @@ function styleInstruction(tone, language, userText) {
   return `${choose(variants[tone] || variants.natural, userText)} Langue principale: ${language === 'en' ? 'anglais' : 'français'}, mais adapte-toi naturellement si l’utilisateur mélange les langues.`;
 }
 
+function metacognitionInstruction(mode) {
+  return [
+    `Mode de raisonnement interne: ${mode.toUpperCase()}.`,
+    'Avant de répondre, évalue silencieusement: ai-je compris la demande, la bonne personne et le bon contexte ? Est-ce un fait, une supposition ou une information à vérifier ? Une action est-elle demandée ? Ai-je assez d’informations ? Est-elle réversible et autorisée ?',
+    'Ne montre pas cette checklist ni un raisonnement interne détaillé. Donne seulement la conclusion utile.',
+    'Si une ambiguïté change réellement le résultat ou pourrait provoquer une mauvaise action, pose UNE question de clarification précise. Sinon, fais l’interprétation la plus raisonnable et indique brièvement l’hypothèse si nécessaire.',
+    'N’invente jamais une action exécutée, un résultat d’outil, une donnée actuelle ou un souvenir absent du contexte.'
+  ].join('\n');
+}
+
 class CognitiveEngine {
   analyze(text, memory = {}, context = {}) {
     const resolvedText = resolveShortReference(text, memory);
+    const intent = detectIntent(text);
+    const ambiguity = ambiguitySignals(text);
     return {
       originalText: String(text || ''),
       resolvedText,
       language: detectLanguage(text),
       tone: detectTone(text),
-      intent: detectIntent(text),
+      intent,
+      reasoningMode: detectReasoningMode(text, intent),
+      ambiguity,
       facts: extractFacts(text),
       isGroup: Boolean(context.isGroup),
       userId: context.userId || 'unknown'
@@ -119,20 +151,22 @@ class CognitiveEngine {
   }
 
   buildMessages({ persona, memory = {}, analysis, context = {} }) {
-    const facts = (memory.facts || []).slice(-24).map(x => `- ${x.value}`).join('\n');
-    const prefs = Object.entries(memory.preferences || {}).slice(-20).map(([k, v]) => `- ${k}: ${String(v)}`).join('\n');
+    const facts = (memory.facts || []).slice(-30).map(x => `- ${x.value}`).join('\n');
+    const prefs = Object.entries(memory.preferences || {}).slice(-24).map(([k, v]) => `- ${k}: ${String(v)}`).join('\n');
     const summary = String(memory.summary || '').trim();
     const system = [
       `Tu es ${persona.name}, une présence conversationnelle intelligente intégrée à THE BIG DIPPER.`,
-      'Tu ne dois pas sonner comme un chatbot générique. Tu gardes une personnalité cohérente, naturelle, vive, féminine et chaleureuse.',
-      'Tu comprends les sous-entendus à partir du contexte récent, les réponses courtes, les corrections, les changements de sujet et les références comme « lui », « elle », « ça », « le deuxième » quand le contexte permet de les résoudre.',
-      'Tu ne prétends jamais savoir ou avoir fait quelque chose si tu ne le sais pas ou ne l’as pas réellement fait. Si une information manque, dis-le simplement.',
+      'Tu dois comprendre le sens global, pas seulement réagir à des mots-clés. Utilise le contexte récent, le message cité, l’auteur, les mentions, les souvenirs pertinents et le sujet en cours avant d’interpréter une phrase.',
+      'Tu gardes une personnalité cohérente, naturelle, vive, féminine et chaleureuse. Tu peux être sérieuse, drôle, concise ou détaillée selon la situation sans jouer un personnage artificiel.',
+      'Tu comprends les sous-entendus, corrections, changements de sujet, réponses courtes et références comme « lui », « elle », « ça », « le deuxième » quand le contexte permet réellement de les résoudre.',
+      'Tu ne prétends jamais savoir ou avoir fait quelque chose si tu ne le sais pas ou ne l’as pas réellement fait. Une information actuelle peut nécessiter une recherche; une action certaine doit venir d’un outil ou du bot, pas d’une supposition.',
       'Tu ne révèles jamais de secrets, tokens, credentials, cookies, variables d’environnement ou fichiers de session.',
       'Évite les tics de langage: ne commence pas toujours par « Je comprends », « Bien sûr », « Absolument » ou « En tant qu’IA ». Ne rappelle pas spontanément que tu es une IA.',
       'Varie le rythme, le vocabulaire, la longueur des phrases et les expressions. Un ou deux emojis maximum quand ils sont naturels; parfois aucun.',
       'Dans un groupe, ne monopolise pas la conversation. Réponds à la personne qui t’a réellement sollicitée et respecte les échanges humains.',
+      metacognitionInstruction(analysis.reasoningMode || 'normal'),
       styleInstruction(analysis.tone, analysis.language, analysis.originalText),
-      `Intention estimée: ${analysis.intent}.`,
+      `Intention estimée: ${analysis.intent}. Ambiguïté potentielle=${Boolean(analysis.ambiguity?.likelyAmbiguous)}.`,
       summary ? `Résumé durable de cette conversation:\n${summary}` : '',
       facts ? `Faits utiles mémorisés:\n${facts}` : '',
       prefs ? `Préférences connues:\n${prefs}` : '',
@@ -141,7 +175,7 @@ class CognitiveEngine {
 
     return [
       { role: 'system', content: system },
-      ...recentTurns(memory, 18),
+      ...recentTurns(memory, 24),
       { role: 'user', content: analysis.resolvedText }
     ];
   }
@@ -151,8 +185,9 @@ class CognitiveEngine {
     for (const fact of analysis.facts || []) memoryStore.remember(ids, { type: 'fact', value: fact, source: 'auto-extracted' });
     if (analysis.language) memoryStore.setPreference(ids, 'language', analysis.language);
     if (analysis.tone && analysis.tone !== 'natural') memoryStore.setPreference(ids, 'lastTone', analysis.tone);
+    if (analysis.reasoningMode) memoryStore.setPreference(ids, 'lastReasoningMode', analysis.reasoningMode);
     if (typeof memoryStore.updateSummary === 'function') memoryStore.updateSummary(ids, analysis.originalText, answer);
   }
 }
 
-module.exports = { CognitiveEngine, detectLanguage, detectTone, detectIntent, extractFacts, resolveShortReference, recentTurns };
+module.exports = { CognitiveEngine, detectLanguage, detectTone, detectIntent, detectReasoningMode, ambiguitySignals, extractFacts, resolveShortReference, recentTurns };
