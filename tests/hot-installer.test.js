@@ -22,7 +22,7 @@ function runNode(file, cwd) {
   return result;
 }
 
-test('les installateurs HOT + OIDC sont idempotents et produisent un runtime syntaxiquement valide', () => {
+test('les installateurs HOT + pull chiffré + OIDC sont idempotents et syntaxiquement valides', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dipper-hot-installer-'));
   try {
     for (const rel of [
@@ -31,6 +31,8 @@ test('les installateurs HOT + OIDC sont idempotents et produisent un runtime syn
       'scripts/validate-hot-command.js',
       'utils/hotCommandUpdater.js',
       'utils/hotOidcAuth.js',
+      'utils/hotReleaseCrypto.js',
+      'utils/hotReleasePoller.js',
       'utils/commandLoader.js',
     ]) {
       copy(path.join(ROOT, rel), path.join(tmp, rel));
@@ -49,8 +51,12 @@ test('les installateurs HOT + OIDC sont idempotents et produisent un runtime syn
     const index = fs.readFileSync(path.join(tmp, 'index.js'), 'utf8');
     const server = fs.readFileSync(path.join(tmp, 'api', 'server.js'), 'utf8');
     assert.equal((index.match(/\[HOT COMMAND UPDATER:HYDRATE\]/g) || []).length, 1);
+    assert.equal((index.match(/\[HOT COMMAND UPDATER:ENCRYPTED PULL\]/g) || []).length, 1);
     assert.equal((server.match(/\[HOT COMMAND UPDATER:API\]/g) || []).length, 1);
     assert.equal((server.match(/\[HOT COMMAND UPDATER:OIDC AUTH\]/g) || []).length, 1);
+    assert.match(index, /startHotReleasePoller/);
+    assert.match(server, /handleHotPublicKeyRoute/);
+    assert.match(server, /\/internal\/hot-command\/key/);
     assert.match(server, /authorizeHotRequest/);
     assert.doesNotMatch(server, /HOT_UPDATE_DISABLED/);
 
