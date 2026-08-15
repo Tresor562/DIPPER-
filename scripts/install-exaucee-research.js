@@ -8,9 +8,14 @@ const ROOT = path.join(__dirname, '..');
 const runtimePath = path.join(ROOT, 'ai_chat', 'runtime.js');
 const MARKER = '[EXAUCEE RESEARCH V1]';
 
+function installBotKnowledge() {
+  require('./install-exaucee-bot-knowledge.js');
+}
+
 let src = fs.readFileSync(runtimePath, 'utf8');
 if (src.includes(MARKER)) {
   console.log('[install-exaucee-research] déjà appliqué');
+  installBotKnowledge();
   process.exit(0);
 }
 
@@ -30,3 +35,4 @@ fs.writeFileSync(runtimePath, src, 'utf8');
 const check = spawnSync(process.execPath, ['--check', runtimePath], { encoding: 'utf8' });
 if (check.status !== 0) throw new Error(`[install-exaucee-research] runtime invalide: ${check.stderr || check.stdout}`);
 console.log('[install-exaucee-research] ✅ recherche multi-source + lecture URL + citations installées');
+installBotKnowledge();
