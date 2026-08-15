@@ -44,17 +44,22 @@ function verifyExauceePrestartBuild() {
     'api/server.js',
     'ai_chat/runtime.js',
     'ai_chat/ai/zeroCostRouter.js',
+    'ai_chat/ai/responseQuality.js',
     'ai_chat/knowledge/creatorProfile.js',
     'ai_chat/cognition/intentOrchestrator.js',
   ]) {
     runNode('--check', [file]);
   }
 
+  runNode('--test', ['tests/exaucee-conversation-quality.test.js']);
+
   // Deuxième passage : les installateurs doivent être idempotents. C'est crucial
   // car Render les exécute une fois au build puis npm start relance prestart.
   for (const installer of installers) runNode(installer);
 
   runNode('--check', ['ai_chat/runtime.js']);
+  runNode('--check', ['ai_chat/ai/zeroCostRouter.js']);
+  runNode('--check', ['ai_chat/ai/responseQuality.js']);
   runNode('--check', ['handler.js']);
   runNode('--check', ['index.js']);
 

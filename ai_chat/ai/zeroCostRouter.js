@@ -4,6 +4,7 @@ const axios = require('axios');
 const { getConfig } = require('../config');
 const { LocalBrain } = require('./localBrain');
 const { LocalModelRunner } = require('./localModelRunner');
+const { isLowQualityResponse } = require('./responseQuality');
 
 const MODE = Object.freeze({ FAST:'fast', NORMAL:'normal', DEEP:'deep', AGENT:'agent', DUAL:'dual', CRITICAL:'critical' });
 const SENSITIVE_RE = /(api[_ -]?key|token|secret|password|mot de passe|credential|cookie|authorization|session(?:id| key| token)?|bearer\s+[a-z0-9._~+\/-]+=*)/i;
@@ -14,6 +15,10 @@ function normalize(text='') {
 
 function lastUserText(messages=[]) {
   return [...messages].reverse().find(m => m?.role === 'user')?.content || '';
+}
+
+function recentAssistantTexts(messages=[], limit=5) {
+  return (messages || []).filter(m => m?.role === 'assistant').slice(-limit).map(m => String(m.content || '')).filter(Boolean);
 }
 
 function inferMode(messages=[], requested) {
@@ -52,6 +57,20 @@ function containsSensitive(messages=[]) {
   return (messages || []).some(m => SENSITIVE_RE.test(String(m?.content || '')));
 }
 
+function unavailableFallback(messages=[], errors=[]) {
+  const userText = lastUserText(messages);
+  const question = String(userText || '').trim();
+  return {
+    provider:'exaucee-no-generative-model',
+    degraded:true,
+    noModel:true,
+    text: question
+      ? `Je t’ai bien comprise, mais je n’ai actuellement aucun cerveau génératif utilisable pour répondre correctement à « ${question.slice(0,180)} ». Je préfère te le dire plutôt que répondre à côté. Un owner peut vérifier mes moteurs avec *.exaucee providers*.`
+      : `Je suis là, mais aucun de mes cerveaux génératifs n’est disponible actuellement. Un owner peut vérifier mes moteurs avec *.exaucee providers*.`,
+    errors: errors.slice(-6)
+  };
+}
+
 class ZeroCostRouter {
   constructor(options = {}) {
     this.config = { ...getConfig(), ...options };
@@ -81,14 +100,18 @@ class ZeroCostRouter {
   }
 
   providerStatus() {
+    const statusFor = name => {
+      const s = this.health.get(name) || {};
+      return { healthy:this._available(name), failures:s.failures || 0, lastError:s.lastError || null, lastSuccess:s.lastSuccess || null };
+    };
     return {
       policy: { maxCostPerRequest:0, maxDailyCost:0, allowPaidProviders:false, paidFallback:false },
       providers: {
-        groq: { configured:Boolean(this.config.groqKey), model:this.config.groqModel || 'openai/gpt-oss-120b', healthy:this._available('groq') },
-        gemini: { configured:Boolean(this.config.geminiKey), model:this.config.geminiModel || 'gemini-2.5-flash', healthy:this._available('gemini') },
-        openrouter: { configured:Boolean(this.config.openRouterKey), model:'openrouter/free', healthy:this._available('openrouter') },
-        pollinations: { configured:Boolean(this.pollinationsKey), model:'openai', healthy:this._available('pollinations'), optional:true },
-        local: { configured:this.localModel.available(), healthy:true }
+        groq: { configured:Boolean(this.config.groqKey), model:this.config.groqModel || 'openai/gpt-oss-120b', ...statusFor('groq') },
+        gemini: { configured:Boolean(this.config.geminiKey), model:this.config.geminiModel || 'gemini-2.5-flash', ...statusFor('gemini') },
+        openrouter: { configured:Boolean(this.config.openRouterKey), model:'openrouter/free', ...statusFor('openrouter') },
+        pollinations: { configured:Boolean(this.pollinationsKey), model:'openai', optional:true, ...statusFor('pollinations') },
+        local: { configured:this.localModel.available(), ...statusFor('local') }
       }
     };
   }
@@ -112,30 +135,38 @@ class ZeroCostRouter {
     if (this.cache.size > 300) this.cache.delete(this.cache.keys().next().value);
   }
 
+  _qualityOK(result, messages) {
+    if (!result?.text?.trim()) return false;
+    return !isLowQualityResponse({
+      candidate:result.text,
+      userText:lastUserText(messages),
+      recentAssistant:recentAssistantTexts(messages)
+    });
+  }
+
   async complete({ messages, mode } = {}) {
     messages = cleanMessages(messages || []);
     const selectedMode = inferMode(messages, mode);
     const sensitive = containsSensitive(messages);
     const cacheKey = sensitive ? '' : this._cacheKey(messages, selectedMode);
     const cached = this._getCached(cacheKey);
-    if (cached) return { ...cached, mode:selectedMode };
+    if (cached && this._qualityOK(cached, messages)) return { ...cached, mode:selectedMode };
 
-    // Si le contexte contient un secret, aucune donnée ne quitte la machine.
     if (sensitive) {
       if (this.localModel.available()) {
         try {
           const result = await this.localModel.complete(messages, { mode:selectedMode });
-          if (result?.text?.trim()) return { ...result, mode:selectedMode, privacy:'local-only' };
+          if (this._qualityOK(result, messages)) return { ...result, mode:selectedMode, privacy:'local-only' };
         } catch (err) { this._failure('local', err); }
       }
-      const fallback = this.localBrain.fallback(messages);
-      return { ...fallback, provider:'exaucee-local-private-fallback', mode:selectedMode, degraded:true, privacy:'local-only' };
+      const local = selectedMode === MODE.FAST ? this.localBrain.answer(messages) : null;
+      if (local?.text && Number(local.confidence || 0) >= 0.97) return { provider:'exaucee-local-private-fast', text:local.text, mode:selectedMode, privacy:'local-only' };
+      return { ...unavailableFallback(messages, ['privacy:local-only']), mode:selectedMode, privacy:'local-only' };
     }
 
-    // Les vrais LLM cloud configurés passent avant les règles et avant un petit modèle local.
     if ([MODE.DUAL, MODE.CRITICAL].includes(selectedMode)) {
       const dual = await this._dual(messages, selectedMode).catch(() => null);
-      if (dual?.text?.trim()) { this._putCached(cacheKey, dual); return dual; }
+      if (dual && this._qualityOK(dual, messages)) { this._putCached(cacheKey, dual); return dual; }
     }
 
     const errors = [];
@@ -143,35 +174,35 @@ class ZeroCostRouter {
       if (!this._providerConfigured(name) || !this._available(name)) continue;
       try {
         const result = await this._call(name, messages, selectedMode);
-        if (result?.text?.trim()) {
-          this._success(name);
-          const out = { ...result, mode:selectedMode };
-          this._putCached(cacheKey, out);
-          return out;
+        if (!this._qualityOK(result, messages)) {
+          errors.push(`${name}:LOW_QUALITY`);
+          continue;
         }
+        this._success(name);
+        const out = { ...result, mode:selectedMode };
+        this._putCached(cacheKey, out);
+        return out;
       } catch (err) {
         this._failure(name, err);
         errors.push(`${name}:${err?.response?.status || err?.code || 'ERR'}:${String(err?.message||err).slice(0,100)}`);
       }
     }
 
-    // Vrai modèle local génératif seulement après les LLM cloud, pour privilégier la qualité.
     if (this.localModel.available()) {
       try {
         const result = await this.localModel.complete(messages, { mode:selectedMode });
-        if (result?.text?.trim()) return { ...result, mode:selectedMode };
+        if (this._qualityOK(result, messages)) return { ...result, mode:selectedMode };
+        errors.push('local:LOW_QUALITY');
       } catch (err) { this._failure('local', err); errors.push(`local:${String(err?.message||err).slice(0,100)}`); }
     }
 
-    // FAST peut encore répondre localement à une salutation triviale.
     if (selectedMode === MODE.FAST) {
       const local = this.localBrain.answer(messages);
       if (local?.text && Number(local.confidence || 0) >= 0.97) return { provider:'exaucee-local-fast', text:local.text, mode:selectedMode };
     }
 
-    const fallback = this.localBrain.fallback(messages);
-    console.warn(`[Exaucée/AI] ${selectedMode} — aucun LLM utilisable: ${errors.join(' | ')}`);
-    return { ...fallback, provider:fallback.provider || 'exaucee-local-fallback', mode:selectedMode, degraded:true };
+    console.warn(`[Exaucée/AI] ${selectedMode} — aucun LLM de qualité utilisable: ${errors.join(' | ')}`);
+    return { ...unavailableFallback(messages, errors), mode:selectedMode };
   }
 
   _providerConfigured(name) {
@@ -183,8 +214,8 @@ class ZeroCostRouter {
   }
 
   _providerOrder(mode) {
-    if (mode === MODE.DEEP || mode === MODE.AGENT || mode === MODE.CRITICAL) return ['groq','gemini','openrouter'];
-    return ['gemini','groq','openrouter'];
+    if (mode === MODE.FAST) return ['gemini','groq','openrouter'];
+    return ['groq','gemini','openrouter'];
   }
 
   async _call(name, messages, mode) {
@@ -203,17 +234,19 @@ class ZeroCostRouter {
     if (candidates.length < 2) return null;
 
     const settled = await Promise.allSettled(candidates.slice(0,2).map(([,fn]) => fn()));
-    const good = settled.map((s,i) => s.status === 'fulfilled' ? { name:candidates[i][0], ...s.value } : null).filter(Boolean);
+    const good = settled.map((s,i) => s.status === 'fulfilled' ? { name:candidates[i][0], ...s.value } : null)
+      .filter(row => row && this._qualityOK(row, messages));
     if (good.length < 2) return good[0] || null;
 
     const synthesisMessages = [
       ...messages,
-      { role:'system', content:'Tu es le vérificateur final d’Exaucée. Deux analyses indépendantes suivent. Produis UNE réponse finale naturelle, exacte et utile. Résous les contradictions. Ne mentionne pas les fournisseurs. Ne révèle aucun raisonnement interne. Si les deux analyses ne suffisent pas à établir un fait, indique l’incertitude au lieu de l’inventer.' },
+      { role:'system', content:'Tu es le vérificateur final d’Exaucée. Deux analyses indépendantes suivent. Produis UNE réponse finale directement liée au dernier message de l’utilisateur, naturelle, exacte et utile. Résous les contradictions. Ne mentionne pas les fournisseurs. Ne révèle aucun raisonnement interne. Si les analyses ne suffisent pas à établir un fait, indique l’incertitude au lieu de l’inventer.' },
       { role:'user', content:`Analyse A:\n${good[0].text}\n\nAnalyse B:\n${good[1].text}` }
     ];
     try {
       const final = good[0].name === 'groq' ? await this._groq(synthesisMessages, MODE.DEEP) : await this._gemini(synthesisMessages, MODE.DEEP);
-      return { provider:`dual:${good[0].name}+${good[1].name}`, text:final.text, mode };
+      if (this._qualityOK(final, messages)) return { provider:`dual:${good[0].name}+${good[1].name}`, text:final.text, mode };
+      return { provider:`dual:${good[0].name}+${good[1].name}`, text:good[0].text, mode };
     } catch (_) {
       return { provider:`dual:${good[0].name}+${good[1].name}`, text:good[0].text, mode };
     }
@@ -221,9 +254,9 @@ class ZeroCostRouter {
 
   _maxTokens(mode) {
     if (mode === MODE.FAST) return 500;
-    if (mode === MODE.NORMAL) return 1600;
-    if (mode === MODE.DEEP || mode === MODE.DUAL) return 3200;
-    return 3600;
+    if (mode === MODE.NORMAL) return 1800;
+    if (mode === MODE.DEEP || mode === MODE.DUAL) return 3600;
+    return 4000;
   }
 
   async _groq(messages, mode) {
@@ -232,9 +265,9 @@ class ZeroCostRouter {
     const models = [...new Set([
       preferred,
       mode === MODE.FAST ? 'llama-3.1-8b-instant' : 'openai/gpt-oss-120b',
-      'qwen/qwen3.6-27b',
       'llama-3.3-70b-versatile',
-      'openai/gpt-oss-20b'
+      'openai/gpt-oss-20b',
+      'llama-3.1-8b-instant'
     ])];
     let lastError;
     for (const model of models) {
@@ -253,7 +286,7 @@ class ZeroCostRouter {
       model,
       messages,
       max_tokens:this._maxTokens(mode),
-      temperature:mode === MODE.FAST ? 0.75 : 0.45
+      temperature:mode === MODE.FAST ? 0.7 : 0.35
     };
     if ([MODE.DEEP,MODE.DUAL,MODE.CRITICAL].includes(mode) && /gpt-oss/i.test(model)) {
       body.reasoning_effort = mode === MODE.CRITICAL ? 'high' : 'medium';
@@ -289,7 +322,7 @@ class ZeroCostRouter {
       role:m.role === 'assistant' ? 'model' : 'user',
       parts:[{ text:String(m.content||'') }]
     }));
-    const generationConfig = { maxOutputTokens:this._maxTokens(mode), temperature:mode===MODE.FAST?0.8:0.5 };
+    const generationConfig = { maxOutputTokens:this._maxTokens(mode), temperature:mode===MODE.FAST?0.7:0.35 };
     if ([MODE.DEEP,MODE.DUAL,MODE.CRITICAL].includes(mode) && /gemini-2\.5-/i.test(model)) {
       generationConfig.thinkingConfig = { thinkingBudget: mode===MODE.CRITICAL ? 4096 : 2048, includeThoughts:false };
     }
@@ -308,7 +341,7 @@ class ZeroCostRouter {
   async _openRouter(messages, mode) {
     if (!this.config.openRouterKey) throw new Error('openrouter key unavailable');
     const res = await this.http.post('https://openrouter.ai/api/v1/chat/completions', {
-      model:'openrouter/free', messages, max_tokens:this._maxTokens(mode), temperature:mode===MODE.FAST?0.8:0.5
+      model:'openrouter/free', messages, max_tokens:this._maxTokens(mode), temperature:mode===MODE.FAST?0.7:0.35
     }, {
       headers:{ Authorization:`Bearer ${this.config.openRouterKey}`, 'Content-Type':'application/json', 'HTTP-Referer':'https://the-big-dipper.onrender.com', 'X-Title':'THE BIG DIPPER — Exaucée' }
     });
@@ -320,7 +353,7 @@ class ZeroCostRouter {
   async _pollinations(messages, mode) {
     if (!this.pollinationsKey) throw new Error('pollinations key unavailable');
     const res = await this.http.post('https://gen.pollinations.ai/v1/chat/completions', {
-      model:'openai', messages, temperature:mode===MODE.FAST?0.8:0.5, max_tokens:this._maxTokens(mode), stream:false
+      model:'openai', messages, temperature:mode===MODE.FAST?0.7:0.35, max_tokens:this._maxTokens(mode), stream:false
     }, { headers:{ Authorization:`Bearer ${this.pollinationsKey}`, 'Content-Type':'application/json' } });
     const text = res.data?.choices?.[0]?.message?.content || '';
     if (!String(text).trim()) throw new Error('pollinations empty response');
@@ -328,4 +361,4 @@ class ZeroCostRouter {
   }
 }
 
-module.exports = { ZeroCostRouter, MODE, inferMode, cleanMessages, containsSensitive };
+module.exports = { ZeroCostRouter, MODE, inferMode, cleanMessages, containsSensitive, unavailableFallback };
