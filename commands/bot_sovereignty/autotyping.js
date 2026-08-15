@@ -1,0 +1,6 @@
+'use strict';
+const config = require('../../config');
+function preferences(){try{return require('../../utils/sessionPreferences');}catch(_){return null;}}
+function readValue(){const p=preferences();if(p?.get)return p.get('autoTyping',false)===true;return String(process.env.AUTO_TYPING||'').toLowerCase()==='true';}
+function writeValue(v){const p=preferences();if(p?.set)p.set('autoTyping',v);else process.env.AUTO_TYPING=v?'true':'false';}
+module.exports={name:'autotyping',aliases:['autotype','typingauto'],category:'👑 Owner',description:'Active ou désactive la présence automatique « écrit… » avant les réponses.',usage:`${config.prefix||'.'}autotyping <on/off/status>`,ownerOnly:true,async execute(sock,msg,args,extra){if(!extra.isOwner&&!msg.key.fromMe)return extra.reply(extra.phrases.denied());const action=String(args[0]||'status').toLowerCase();if(action==='on')writeValue(true);else if(action==='off')writeValue(false);else if(action!=='status')return extra.reply(`Usage : ${config.prefix||'.'}autotyping on | off | status`);const enabled=readValue();return extra.reply(`⌨️ Autotyping : ${enabled?'🟢 ON':'🔴 OFF'}\n\n${enabled?'Le bot affichera « écrit… » avant ses réponses.':'La présence automatique d’écriture est désactivée.'}`);}};
