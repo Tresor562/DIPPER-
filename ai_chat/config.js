@@ -6,7 +6,9 @@ const DEFAULTS = Object.freeze({
   maxCostPerRequest: 0,
   maxDailyCost: 0,
   localProvider: 'local',
-  cloudOrder: ['groq-free', 'gemini-free', 'openrouter-free']
+  cloudOrder: ['groq', 'gemini', 'openrouter', 'pollinations'],
+  groqModel: 'openai/gpt-oss-120b',
+  geminiModel: 'gemini-2.5-flash'
 });
 
 function getConfig(env = process.env) {
@@ -19,7 +21,9 @@ function getConfig(env = process.env) {
     localBaseUrl: env.EXAUCEE_LOCAL_BASE_URL || 'http://127.0.0.1:11434',
     localModel: env.EXAUCEE_LOCAL_MODEL || 'qwen3:8b',
     groqKey: env.GROQ_API_KEY || '',
+    groqModel: env.EXAUCEE_GROQ_MODEL || DEFAULTS.groqModel,
     geminiKey: env.GEMINI_API_KEY || '',
+    geminiModel: env.EXAUCEE_GEMINI_MODEL || DEFAULTS.geminiModel,
     openRouterKey: env.OPENROUTER_API_KEY || ''
   };
 }
