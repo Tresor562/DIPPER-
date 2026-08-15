@@ -67,7 +67,12 @@ class ResearchEngine {
 
   needsResearch(text = '') {
     const t = normalize(text);
-    return Boolean(extractUrl(text)) || /\b(cherche|recherche|verifie|trouve|sources?|actualite|aujourd'hui|maintenant|recent|derniere?s?|nouvelle?s?|prix|score|classement|meteo|qui est actuellement|en ce moment|lis ce lien|analyse ce lien|resume ce lien)\b/.test(t);
+    if (Boolean(extractUrl(text))) return true;
+    if (/\b(cherche|recherche|verifie|trouve|sources?|actualite|aujourd'hui|maintenant|recent|derniere?s?|nouvelle?s?|prix|score|classement|meteo|qui est actuellement|en ce moment|lis ce lien|analyse ce lien|resume ce lien)\b/.test(t)) return true;
+    // Questions factuelles d'identification : utile quand le cerveau local n'a pas la connaissance.
+    if (/^(?:qui\s+est|qui\s+sont|qu['’]?est[- ]ce\s+que|c['’]?est\s+qui)\s+.{2,100}[? ]*$/.test(t)) return true;
+    if (/^(?:ou\s+se\s+trouve|où\s+se\s+trouve|quand\s+a\s+eu\s+lieu|quelle\s+est\s+la\s+capitale\s+de)\s+.{2,100}[? ]*$/.test(t)) return true;
+    return false;
   }
 
   async searchDuckDuckGo(query) {
