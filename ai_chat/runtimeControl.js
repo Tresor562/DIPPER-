@@ -23,6 +23,11 @@ function unwrap(message = {}) {
   return m;
 }
 
+function messageText(msg) {
+  const m = unwrap(msg?.message || {});
+  return String(m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || '').trim();
+}
+
 function normalizeJid(jid = '') {
   return String(jid).replace(/:\d+(?=@)/, '');
 }
@@ -42,16 +47,72 @@ function explicitlyTagged(sock, msg) {
   return mentions.some(jid => known.has(String(jid)) || known.has(normalizeJid(jid)));
 }
 
+function signedByAnotherExaucee(msg) {
+  const text = messageText(msg).replace(/\*+/g, '').trim();
+  return /(?:^|\n)\s*>\s*Exauc[eé]e\s*$/i.test(text);
+}
+
+function naturalControl(text) {
+  const m = String(text || '').trim().match(/^\.?\s*exauc[eé]e\s+(on|off|status|restart)\s*$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+async function sendControlReply(sock, msg, text) {
+  const chatId = msg?.key?.remoteJid;
+  if (!chatId || !sock) return;
+  const payload = { text: `${text}\n\n> Exaucée`, __exaucee: true };
+  const opts = chatId.endsWith('@g.us') ? { quoted: msg } : undefined;
+  try { await sock.sendMessage(chatId, payload, opts); } catch (_) { await sock.sendMessage(chatId, payload); }
+}
+
 async function handleExauceeMessage(args = {}) {
   const sessionId = currentSessionId();
   const { settings } = refreshInstance(sessionId);
+  const owner = Boolean(args.actor?.isOwner || args.actor?.isSuperMe || args.msg?.key?.fromMe);
+  const control = naturalControl(messageText(args.msg));
+
+  // Les ordres naturels Owner restent accessibles même quand Exaucée est OFF,
+  // afin de pouvoir la rallumer sans passer par Render.
+  if (control && owner) {
+    if (control === 'on') {
+      setExauceeSettings({ enabled: true }, sessionId);
+      restartExaucee(args.sock, sessionId);
+      await sendControlReply(args.sock, args.msg, '🌸 Exaucée est activée.');
+      return true;
+    }
+    if (control === 'off') {
+      setExauceeSettings({ enabled: false }, sessionId);
+      await sendControlReply(args.sock, args.msg, '🌸 Exaucée est désactivée. Je resterai silencieuse jusqu’à « Exaucée on » ou `.exaucee on`.');
+      return true;
+    }
+    if (control === 'status') {
+      const s = loadSettings(sessionId);
+      await sendControlReply(args.sock, args.msg, `🌸 Exaucée : ${s.enabled ? 'ON' : 'OFF'} | onlytag=${s.onlyTag ? 'ON' : 'OFF'} | owneronly=${s.ownerOnly ? 'ON' : 'OFF'}`);
+      return true;
+    }
+    if (control === 'restart') {
+      const s = loadSettings(sessionId);
+      if (!s.enabled) {
+        await sendControlReply(args.sock, args.msg, '🌸 Exaucée est OFF. Active-la d’abord avec « Exaucée on ».');
+        return true;
+      }
+      restartExaucee(args.sock, sessionId);
+      await sendControlReply(args.sock, args.msg, '♻️ Runtime Exaucée relancé.');
+      return true;
+    }
+  }
+
+  // OFF est absolu : aucune conversation, jeu, mémoire ou action dynamique.
   if (!settings.enabled) return false;
+
+  // Deux instances Exaucée dans le même groupe ne doivent jamais se répondre.
+  if (signedByAnotherExaucee(args.msg)) return false;
 
   const chatId = args.msg?.key?.remoteJid || '';
   const isGroup = chatId.endsWith('@g.us');
   if (isGroup && !settings.groups) return false;
   if (!isGroup && !settings.private) return false;
-  if (settings.ownerOnly && !(args.actor?.isOwner || args.actor?.isSuperMe)) return false;
+  if (settings.ownerOnly && !owner) return false;
   if (settings.onlyTag && isGroup && !explicitlyTagged(args.sock, args.msg)) return false;
 
   return runtime.handleExauceeMessage(args);
@@ -74,9 +135,7 @@ function bootstrapExaucee(args = {}) {
   return runtime.bootstrapExaucee({ ...args, sessionId });
 }
 
-function getExauceeStatus(sessionId = currentSessionId()) {
-  return loadSettings(sessionId);
-}
+function getExauceeStatus(sessionId = currentSessionId()) { return loadSettings(sessionId); }
 
 function setExauceeSettings(patch, sessionId = currentSessionId()) {
   const settings = saveSettings(sessionId, patch);
@@ -108,5 +167,7 @@ module.exports = {
   setExauceeSettings,
   resetExauceeSettings,
   restartExaucee,
-  explicitlyTagged
+  explicitlyTagged,
+  signedByAnotherExaucee,
+  naturalControl
 };
