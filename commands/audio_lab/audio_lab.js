@@ -2,98 +2,30 @@
 
 const fs = require('fs');
 const engine = require('../../utils/audioLabEngine');
-
+const dj = require('../../utils/audioDjEngine');
 const CATEGORY = '🎚️ AUDIO LAB / DJ TOOLS';
 
-function formatError(err) {
-  const m = String(err?.message || err || 'Erreur inconnue');
-  return `❌ *Audio Lab*\n${m.length > 500 ? m.slice(0, 500) + '…' : m}`;
+function formatError(err) { const m=String(err?.message||err||'Erreur inconnue'); return `❌ *Audio Lab*\n${m.length>700?m.slice(0,700)+'…':m}`; }
+function sendAudio(sock,msg,from,file,name){ return sock.sendMessage(from,{audio:fs.readFileSync(file),mimetype:'audio/mpeg',fileName:`DIPPER-${name}.mp3`,ptt:false},from?.endsWith('@g.us')?{quoted:msg}:undefined); }
+function effectCommand(name, description, usage='') {
+  return {name,aliases:[],category:CATEGORY,description,usage:`.${name}${usage?' '+usage:''}`,async execute(sock,msg,args,extra){const{reply,from}=extra;let input,output;try{await reply(`🎚️ *Audio Lab* — traitement \`${name}\` en cours…`);input=await engine.downloadInput(msg);output=await engine.processAudio(input,name,args);await sendAudio(sock,msg,from,output,name);}catch(err){await reply(formatError(err));}finally{engine.cleanup(input,output);}}};
 }
-
-function effectCommand(name, description, usage = '') {
-  return {
-    name,
-    aliases: [],
-    category: CATEGORY,
-    description,
-    usage: `.${name}${usage ? ' ' + usage : ''}`,
-    async execute(sock, msg, args, extra) {
-      const { reply, from, phrases } = extra;
-      let input, output;
-      try {
-        await reply(`🎚️ *Audio Lab* — traitement \`${name}\` en cours…`);
-        input = await engine.downloadInput(msg);
-        output = await engine.processAudio(input, name, args);
-        await sock.sendMessage(from, {
-          audio: fs.readFileSync(output),
-          mimetype: 'audio/mpeg',
-          fileName: `DIPPER-${name}.mp3`,
-          ptt: false,
-        }, from?.endsWith('@g.us') ? { quoted: msg } : undefined);
-      } catch (err) {
-        await reply(formatError(err));
-      } finally {
-        engine.cleanup(input, output);
-      }
-    }
-  };
-}
-
-const defs = [
-  ['bass','Augmenter ou réduire les basses','<niveau -20..20>'],
-  ['treble','Régler les aigus','<niveau -20..20>'],
-  ['mid','Régler les médiums','<niveau -20..20>'],
-  ['equalizer','Appliquer un preset EQ','<eqclub|eqrock|eqpop|eqelectro|eqhiphop|eqcinema|eqvocal|eqbassboost>'],
-  ['eqclub','Preset égaliseur club'],['eqbassboost','Preset bass boost'],['eqvocal','Preset voix'],['eqrock','Preset rock'],['eqpop','Preset pop'],['eqelectro','Preset électro'],['eqhiphop','Preset hip-hop'],['eqcinema','Preset cinéma'],
-  ['bassboost','Renforcer fortement les basses'],['superbass','Bass boost agressif'],['nightcore','Effet nightcore'],['slowed','Version ralentie'],['slowedreverb','Slowed + reverb'],
-  ['reverb','Réverbération','<niveau/ms>'],['echo','Écho','<ms>'],['delay','Délai audio','<ms>'],['flanger','Effet flanger'],['chorus','Effet chorus'],['phaser','Effet phaser'],['tremolo','Effet tremolo'],['vibrato','Effet vibrato'],['distortion','Distorsion'],['overdrive','Overdrive'],['lofi','Effet lo-fi'],['vinyl','Couleur vinyle'],['radio','Effet radio'],['telephone','Effet téléphone'],['underwater','Effet sous-marin'],['8d','Panoramique 8D'],['3d','Spatialisation 3D'],['stereo','Élargissement stéréo'],['mono','Conversion mono'],
-  ['speed','Changer la vitesse','<0.25-4>'],['tempo','Changer le tempo','<bpm>'],['pitch','Changer le pitch','<demi-tons>'],['pitchup','Pitch +3 demi-tons'],['pitchdown','Pitch -3 demi-tons'],['key','Transposer la tonalité','<demi-tons>'],
-  ['trim','Découper un extrait','<début_sec> <fin_sec>'],['cut','Extraire une portion','<début_sec> <fin_sec>'],['fadein','Fondu entrant','<sec>'],['fadeout','Fondu sortant','<sec>'],['normalize','Normaliser le volume'],['volume','Régler le volume','<0-5>'],['boostvolume','Booster le volume'],['silence','Mettre une zone en silence','<début_sec> <fin_sec>'],['reverse','Inverser le son'],['loop','Boucler le morceau','<1-10>'],['removeintro','Retirer le début','<sec>'],['removeoutro','Retirer la fin','<sec>'],
-  ['filterin','Entrée filtrée'],['filterout','Sortie filtrée'],['lowpass','Filtre passe-bas','<hz>'],['highpass','Filtre passe-haut','<hz>'],['bandpass','Filtre passe-bande','<hz>'],['drop','Accentuer un drop'],['builddup','Créer une montée simple'],
-  ['vocalboost','Renforcer les voix'],['vocalreduce','Réduire la voix centrale'],['removevocals','Réduction de voix centrale'],['instrumental','Approximation instrumentale'],['acapella','Approximation voix'],['denoise','Réduire le bruit'],['dehum','Réduire ronflement 50/60 Hz'],['deess','Réduire les sifflantes'],['compressor','Compresseur'],['limiter','Limiteur'],['gate','Noise gate'],
-  ['master','Mastering automatique'],['masterclub','Mastering club'],['masterloud','Mastering fort'],['masterclean','Mastering propre'],['masterbass','Mastering bass'],['mastervocal','Mastering vocal']
-];
-
-const commands = defs.map(d => effectCommand(...d));
-
-commands.push({
-  name: 'analyzesound', aliases: ['audiostats'], category: CATEGORY,
-  description: 'Analyse durée et poids de l’audio', usage: '.analyzesound (répondre à un audio)',
-  async execute(sock, msg, args, extra) {
-    const { reply, phrases } = extra; let input;
-    try {
-      input = await engine.downloadInput(msg);
-      const a = await engine.analyze(input);
-      await reply(`📊 *Analyse audio*\n\n⏱️ Durée : ${a.duration.toFixed(2)} s\n💾 Taille : ${a.mb} Mo\n🎛️ Moteur : FFmpeg\n\n${phrases?.footer?.() || ''}`);
-    } catch (e) { await reply(formatError(e)); } finally { engine.cleanup(input); }
-  }
-});
-
-commands.push({
-  name: 'waveform', aliases: [], category: CATEGORY, description: 'Génère la forme d’onde', usage: '.waveform',
-  async execute(sock, msg, args, extra) { const { reply, from } = extra; let i,o; try { i=await engine.downloadInput(msg); o=await engine.waveform(i); await sock.sendMessage(from,{image:fs.readFileSync(o),caption:'〽️ *Waveform — THE BIG DIPPER*'},{quoted:msg}); } catch(e){await reply(formatError(e));} finally{engine.cleanup(i,o);} }
-});
-
-commands.push({
-  name: 'spectrogram', aliases: [], category: CATEGORY, description: 'Génère un spectrogramme', usage: '.spectrogram',
-  async execute(sock, msg, args, extra) { const { reply, from } = extra; let i,o; try { i=await engine.downloadInput(msg); o=await engine.spectrogram(i); await sock.sendMessage(from,{image:fs.readFileSync(o),caption:'🌈 *Spectrogramme — THE BIG DIPPER*'},{quoted:msg}); } catch(e){await reply(formatError(e));} finally{engine.cleanup(i,o);} }
-});
-
-// Commandes multi-pistes : un premier jalon utile et explicite. Elles n’inventent
-// pas un résultat si deux sources audio ne sont pas disponibles dans un seul message.
-for (const [name, desc] of [
-  ['mix','Mixer deux pistes'],['blend','Fusion progressive'],['djmix','Mix DJ automatique'],['crossfade','Crossfade entre deux pistes'],['beatmatch','Aligner deux pistes'],['autodj','Mix automatique de plusieurs pistes'],['syncbpm','Synchroniser les BPM'],['transition','Transition DJ'],['joinaudio','Fusionner plusieurs pistes'],['splitbeat','Découper par segments']
-]) {
-  commands.push({ name, aliases: [], category: CATEGORY, description: desc, usage: `.${name}`, async execute(sock,msg,args,extra){ await extra.reply(`🎛️ *${name}* nécessite deux pistes. Le moteur multi-pistes sera branché sur la file média du chat ; pour l’instant utilise les traitements mono-piste déjà actifs.`); } });
-}
-
-commands.push({
-  name:'bpm', aliases:[], category:CATEGORY, description:'Analyse BPM (préparation moteur)', usage:'.bpm',
-  async execute(sock,msg,args,extra){ await extra.reply('🥁 La détection BPM avancée nécessite un analyseur dédié. Les effets de tempo FFmpeg sont déjà actifs via `.tempo`.'); }
-});
-commands.push({
-  name:'keydetect', aliases:[], category:CATEGORY, description:'Détection de tonalité (préparation moteur)', usage:'.keydetect',
-  async execute(sock,msg,args,extra){ await extra.reply('🎼 La détection de tonalité avancée nécessite un analyseur dédié. La transposition est déjà active via `.key`.'); }
-});
-
-module.exports = commands;
+const defs=[
+['bass','Augmenter ou réduire les basses','<niveau -20..20>'],['treble','Régler les aigus','<niveau -20..20>'],['mid','Régler les médiums','<niveau -20..20>'],['equalizer','Appliquer un preset EQ','<preset>'],
+['eqclub','Preset égaliseur club'],['eqbassboost','Preset bass boost'],['eqvocal','Preset voix'],['eqrock','Preset rock'],['eqpop','Preset pop'],['eqelectro','Preset électro'],['eqhiphop','Preset hip-hop'],['eqcinema','Preset cinéma'],
+['bassboost','Renforcer fortement les basses'],['superbass','Bass boost agressif'],['nightcore','Effet nightcore'],['slowed','Version ralentie'],['slowedreverb','Slowed + reverb'],['reverb','Réverbération','<ms>'],['echo','Écho','<ms>'],['delay','Délai audio','<ms>'],['flanger','Effet flanger'],['chorus','Effet chorus'],['phaser','Effet phaser'],['tremolo','Effet tremolo'],['vibrato','Effet vibrato'],['distortion','Distorsion'],['overdrive','Overdrive'],['lofi','Effet lo-fi'],['vinyl','Couleur vinyle'],['radio','Effet radio'],['telephone','Effet téléphone'],['underwater','Effet sous-marin'],['8d','Panoramique 8D'],['3d','Spatialisation 3D'],['stereo','Élargissement stéréo'],['mono','Conversion mono'],
+['speed','Changer la vitesse','<0.25-4>'],['tempo','Changer le tempo','<bpm>'],['pitch','Changer le pitch','<demi-tons>'],['pitchup','Pitch +3 demi-tons'],['pitchdown','Pitch -3 demi-tons'],['key','Transposer la tonalité','<demi-tons>'],['trim','Découper un extrait','<début_sec> <fin_sec>'],['cut','Extraire une portion','<début_sec> <fin_sec>'],['fadein','Fondu entrant','<sec>'],['fadeout','Fondu sortant','<sec>'],['normalize','Normaliser le volume'],['volume','Régler le volume','<0-5>'],['boostvolume','Booster le volume'],['silence','Mettre une zone en silence','<début_sec> <fin_sec>'],['reverse','Inverser le son'],['loop','Boucler le morceau','<1-10>'],['removeintro','Retirer le début','<sec>'],['removeoutro','Retirer la fin','<sec>'],
+['filterin','Entrée filtrée'],['filterout','Sortie filtrée'],['lowpass','Filtre passe-bas','<hz>'],['highpass','Filtre passe-haut','<hz>'],['bandpass','Filtre passe-bande','<hz>'],['drop','Accentuer un drop'],['builddup','Créer une montée simple'],['vocalboost','Renforcer les voix'],['vocalreduce','Réduire la voix centrale'],['removevocals','Réduction de voix centrale'],['instrumental','Approximation instrumentale'],['acapella','Approximation voix'],['denoise','Réduire le bruit'],['dehum','Réduire ronflement 50/60 Hz'],['deess','Réduire les sifflantes'],['compressor','Compresseur'],['limiter','Limiteur'],['gate','Noise gate'],['master','Mastering automatique'],['masterclub','Mastering club'],['masterloud','Mastering fort'],['masterclean','Mastering propre'],['masterbass','Mastering bass'],['mastervocal','Mastering vocal']];
+const commands=defs.map(d=>effectCommand(...d));
+commands.push({name:'analyzesound',aliases:['audiostats'],category:CATEGORY,description:'Analyse durée et poids',usage:'.analyzesound',async execute(sock,msg,args,extra){let i;try{i=await engine.downloadInput(msg);const a=await engine.analyze(i);await extra.reply(`📊 *Analyse audio*\n\n⏱️ Durée : ${a.duration.toFixed(2)} s\n💾 Taille : ${a.mb} Mo\n🎛️ Moteur : FFmpeg`);}catch(e){await extra.reply(formatError(e));}finally{engine.cleanup(i);}}});
+commands.push({name:'waveform',aliases:[],category:CATEGORY,description:'Génère la forme d’onde',usage:'.waveform',async execute(sock,msg,args,extra){let i,o;try{i=await engine.downloadInput(msg);o=await engine.waveform(i);await sock.sendMessage(extra.from,{image:fs.readFileSync(o),caption:'〽️ *Waveform — THE BIG DIPPER*'},{quoted:msg});}catch(e){await extra.reply(formatError(e));}finally{engine.cleanup(i,o);}}});
+commands.push({name:'spectrogram',aliases:[],category:CATEGORY,description:'Génère un spectrogramme',usage:'.spectrogram',async execute(sock,msg,args,extra){let i,o;try{i=await engine.downloadInput(msg);o=await engine.spectrogram(i);await sock.sendMessage(extra.from,{image:fs.readFileSync(o),caption:'🌈 *Spectrogramme — THE BIG DIPPER*'},{quoted:msg});}catch(e){await extra.reply(formatError(e));}finally{engine.cleanup(i,o);}}});
+commands.push({name:'queueaudio',aliases:['addtrack','enqueueaudio'],category:CATEGORY,description:'Ajouter la piste citée à la file DJ du chat',usage:'.queueaudio',async execute(sock,msg,args,extra){try{const n=await dj.enqueue(extra.from,msg);await extra.reply(`➕ Piste ajoutée à la file DJ (${n}/${dj.MAX_QUEUE_TRACKS}).`);}catch(e){await extra.reply(formatError(e));}}});
+commands.push({name:'audioqueue',aliases:['djqueue'],category:CATEGORY,description:'Afficher la file DJ',usage:'.audioqueue',async execute(sock,msg,args,extra){const q=dj.queueInfo(extra.from);await extra.reply(q.length?`🎚️ *File DJ*\n\n${q.map(x=>`${x.index}. ${x.label} — ${x.mb} Mo`).join('\n')}`:'ℹ️ File DJ vide.');}});
+commands.push({name:'clearqueue',aliases:['cleartracks'],category:CATEGORY,description:'Vider la file DJ',usage:'.clearqueue',async execute(sock,msg,args,extra){dj.clearQueue(extra.from);await extra.reply('🧹 File DJ vidée.');}});
+commands.push({name:'removequeue',aliases:['removetrack'],category:CATEGORY,description:'Retirer une piste de la file DJ',usage:'.removequeue <index>',async execute(sock,msg,args,extra){await extra.reply(dj.removeTrack(extra.from,args[0])?'🗑️ Piste retirée.':'⚠️ Index invalide.');}});
+for(const [name,mode,desc] of [['mix','mix','Mixer les pistes de la file'],['blend','blend','Fusion progressive'],['djmix','djmix','Mix DJ avec crossfades'],['crossfade','crossfade','Crossfade entre pistes'],['beatmatch','beatmatch','Aligner les BPM puis mixer'],['autodj','autodj','Mix automatique de la file'],['syncbpm','syncbpm','Synchroniser les BPM'],['transition','transition','Transition DJ'],['joinaudio','join','Concaténer les pistes']]) commands.push({name,aliases:[],category:CATEGORY,description:desc,usage:`.${name} [fondu_sec]`,async execute(sock,msg,args,extra){let out;try{await extra.reply(`🎛️ *${name}* en cours…`);out=await dj.processQueue(extra.from,mode,{fade:args[0]});await sendAudio(sock,msg,extra.from,out,name);}catch(e){await extra.reply(formatError(e));}finally{dj.cleanup(out);}}});
+commands.push({name:'splitbeat',aliases:[],category:CATEGORY,description:'Analyser le tempo pour préparer un découpage rythmique',usage:'.splitbeat [index]',async execute(sock,msg,args,extra){try{const a=await dj.analyzeQueued(extra.from,args[0]||1);const beat=a.bpm?60/a.bpm:0;await extra.reply(`🥁 *Beat grid*\nBPM : ${a.bpm||'indétectable'}\nDurée : ${a.seconds.toFixed(2)} s\nIntervalle beat : ${beat?beat.toFixed(3)+' s':'N/A'}`);}catch(e){await extra.reply(formatError(e));}}});
+commands.push({name:'bpm',aliases:[],category:CATEGORY,description:'Détecter réellement le BPM',usage:'.bpm [index de file]',async execute(sock,msg,args,extra){let i;try{let bpm;if(dj.queueInfo(extra.from).length){bpm=(await dj.analyzeQueued(extra.from,args[0]||1)).bpm;}else{i=await engine.downloadInput(msg);bpm=await dj.estimateBpm(i);}await extra.reply(`🥁 *BPM détecté* : ${bpm||'indétectable'}`);}catch(e){await extra.reply(formatError(e));}finally{engine.cleanup(i);}}});
+commands.push({name:'keydetect',aliases:['detectkey'],category:CATEGORY,description:'Détecter réellement la tonalité',usage:'.keydetect [index de file]',async execute(sock,msg,args,extra){let i;try{let k;if(dj.queueInfo(extra.from).length){k=(await dj.analyzeQueued(extra.from,args[0]||1)).key;}else{i=await engine.downloadInput(msg);k=await dj.detectKey(i);}await extra.reply(`🎼 *Tonalité détectée* : ${k.key}\n📈 Confiance : ${k.confidence}%`);}catch(e){await extra.reply(formatError(e));}finally{engine.cleanup(i);}}});
+module.exports=commands;
