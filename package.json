@@ -33,6 +33,7 @@
     "@whiskeysockets/baileys": "6.7.22",
     "7zip-bin": "^5.2.0",
     "adm-zip": "^0.5.16",
+    "app-info-parser": "1.1.6",
     "axios": "^1.7.2",
     "canvas": "^3.2.1",
     "cheerio": "^1.0.0-rc.12",
