@@ -14,64 +14,114 @@ if (!fs.existsSync(handlerPath) || !fs.existsSync(runtimePath)) {
   throw new Error('[feature-pack] handler/runtime introuvable');
 }
 
-function replaceUniqueRegex(source, regex, replacer, label) {
-  const matches = [...source.matchAll(new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g'))];
-  if (matches.length !== 1) {
-    throw new Error(`[feature-pack] ${label}: attendu 1 emplacement, trouvé ${matches.length}`);
+function linesOf(source) {
+  return source.replace(/\r\n/g, '\n').split('\n');
+}
+
+function findUniqueLine(lines, predicate, label) {
+  const hits = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (predicate(lines[i], i)) hits.push(i);
   }
-  return source.replace(regex, replacer);
+  if (hits.length !== 1) {
+    const preview = lines
+      .map((line, i) => ({ line, i }))
+      .filter(x => /groupMetadata|botIsAdmin|ANTI-ALL|autoTyping|_senderIsAdmin|antigroupmention|handleAntilink/.test(x.line))
+      .slice(0, 30)
+      .map(x => `${x.i + 1}: ${x.line.trim()}`)
+      .join('\n');
+    throw new Error(`[feature-pack] ${label}: attendu 1 ligne, trouvé ${hits.length}${preview ? `\nRepères disponibles:\n${preview}` : ''}`);
+  }
+  return hits[0];
 }
 
-let src = fs.readFileSync(handlerPath, 'utf8');
+let src = fs.readFileSync(handlerPath, 'utf8').replace(/\r\n/g, '\n');
+let lines = linesOf(src);
 
-// @all : ancre structurelle autour du chargement des métadonnées de groupe.
-// Cette ancre ne dépend pas des patches AntiLink/Exaucée exécutés avant nous.
+// @all doit être traité AVANT les premiers retours de messages non-commandes
+// (notamment l'auto-reply vidéo). On l'insère juste après l'initialisation
+// lazy de groupMetadata/botIsAdmin, bien avant NLP/AutoReply/protections.
 if (!src.includes(GROUP_MARKER)) {
-  const groupRegex = /(\s*if \(!_groupMetadataLoaded\) \{ groupMetadata = await getGroupMeta\(\); \}\r?\n\s*if \(!_botIsAdminLoaded\)\s*\{ botIsAdmin\s*= await getBotAdmin\(\); \}\r?\n)(\s*\/\/ ANTI-ALL)/;
-  src = replaceUniqueRegex(src, groupRegex, (full, metaBlock, antiAllLine) => {
-    return `${metaBlock}\n      // ${GROUP_MARKER}\n      // @all est un raccourci de groupe, pas une commande préfixée : le traiter\n      // ici avant les protections et avant tout retour de message non-commande.\n      if (/^@(all|everyone)(?:\\s|$)/i.test(String(body || '').trim())) {\n        const _featurePackSenderIsAdmin = await isAdmin(sock, sender, from, groupMetadata);\n        if (await require('./utils/featurePackRuntime').handleAdminAtAll({\n          sock, msg, from, sender, body, groupMetadata,\n          isAdmin: _featurePackSenderIsAdmin, isOwner: isMe,\n        })) return;\n      }\n\n${antiAllLine}`;
-  }, 'ancre groupe');
+  const anchor = findUniqueLine(
+    lines,
+    line => /let\s+botIsAdmin\s*=\s*isCommand\s*&&\s*isGroup\s*\?\s*await\s+getBotAdmin\(\)\s*:\s*false;/.test(line),
+    'ancre @all après initialisation botIsAdmin'
+  );
+  const indent = (lines[anchor].match(/^\s*/) || ['    '])[0];
+  const block = [
+    '',
+    `${indent}// ${GROUP_MARKER}`,
+    `${indent}// @all est un raccourci non préfixé : le traiter avant NLP/AutoReply.`,
+    `${indent}if (isGroup && /^@(all|everyone)(?:\\s|$)/i.test(String(body || '').trim())) {`,
+    `${indent}  if (!_groupMetadataLoaded) { groupMetadata = await getGroupMeta(); }`,
+    `${indent}  const _featurePackSenderIsAdmin = await isAdmin(sock, sender, from, groupMetadata);`,
+    `${indent}  if (await require('./utils/featurePackRuntime').handleAdminAtAll({`,
+    `${indent}    sock, msg, from, sender, body, groupMetadata,`,
+    `${indent}    isAdmin: _featurePackSenderIsAdmin, isOwner: isMe,`,
+    `${indent}  })) return;`,
+    `${indent}}`,
+  ];
+  lines.splice(anchor + 1, 0, ...block);
+  src = lines.join('\n');
 }
 
-// Présence automatique : préférer l'ancienne ligne si elle existe, sinon
-// s'accrocher structurellement juste avant le calcul _senderIsAdmin.
+// Présence automatique : remplacer l'ancien autoTyping ou, si un patch l'a
+// déjà déplacé, s'insérer juste avant le calcul final _senderIsAdmin.
 if (!src.includes(PRESENCE_MARKER)) {
-  const oldPresence = "    if (config.autoTyping) await sock.sendPresenceUpdate('composing', from);";
-  if (src.includes(oldPresence)) {
-    src = src.replace(
-      oldPresence,
-      `    // ${PRESENCE_MARKER}\n    await require('./utils/featurePackRuntime').applyAutoPresence(sock, from);`
+  lines = linesOf(src);
+  let presenceHits = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/config\.autoTyping/.test(lines[i]) && /sendPresenceUpdate\(['"]composing['"],\s*from\)/.test(lines[i])) presenceHits.push(i);
+  }
+
+  if (presenceHits.length === 1) {
+    const i = presenceHits[0];
+    const indent = (lines[i].match(/^\s*/) || ['    '])[0];
+    lines.splice(i, 1,
+      `${indent}// ${PRESENCE_MARKER}`,
+      `${indent}await require('./utils/featurePackRuntime').applyAutoPresence(sock, from);`
     );
   } else if (src.includes('applyAutoPresence(sock, from)')) {
-    const presenceRegex = /(^[ \t]*.*applyAutoPresence\(sock,\s*from\).*?$)/m;
-    src = replaceUniqueRegex(
-      src,
-      presenceRegex,
-      `    // ${PRESENCE_MARKER}\n$1`,
-      'présence déjà installée'
-    );
+    const i = findUniqueLine(lines, line => line.includes('applyAutoPresence(sock, from)'), 'présence déjà installée');
+    const indent = (lines[i].match(/^\s*/) || ['    '])[0];
+    lines.splice(i, 0, `${indent}// ${PRESENCE_MARKER}`);
   } else {
-    const senderAdminRegex = /(^[ \t]*const _senderIsAdmin = isGroup \? await isAdmin\(sock, sender, from, groupMetadata\) : false;)/m;
-    src = replaceUniqueRegex(
-      src,
-      senderAdminRegex,
-      `    // ${PRESENCE_MARKER}\n    await require('./utils/featurePackRuntime').applyAutoPresence(sock, from);\n\n$1`,
+    const i = findUniqueLine(
+      lines,
+      line => /const\s+_senderIsAdmin\s*=\s*isGroup\s*\?\s*await\s+isAdmin\(sock,\s*sender,\s*from,\s*groupMetadata\)\s*:\s*false;/.test(line),
       'ancre présence de secours'
     );
+    const indent = (lines[i].match(/^\s*/) || ['    '])[0];
+    lines.splice(i, 0,
+      `${indent}// ${PRESENCE_MARKER}`,
+      `${indent}await require('./utils/featurePackRuntime').applyAutoPresence(sock, from);`,
+      ''
+    );
   }
+  src = lines.join('\n');
 }
 
-// AntiWaLink : ne plus dépendre de la forme de l'appel AntiLink. Le wrapper
-// transforme AntiLink en bloc multi-lignes avant ce script, ce qui cassait
-// l'ancienne ancre. On s'insère directement après antigroupmention.
+// AntiWaLink : insertion après l'appel antigroupmention. Aucun couplage avec
+// la forme du patch AntiLink (ligne simple ou bloc multi-lignes).
 if (!src.includes('handleAntiwalink(sock, msg, groupMetadata)')) {
-  const antiGroupMentionRegex = /(^[ \t]*if \(groupSettings\.antigroupmention[^\r\n]*handleAntigroupmention\(sock, msg, groupMetadata\);[^\r\n]*\r?$)/m;
-  src = replaceUniqueRegex(
-    src,
-    antiGroupMentionRegex,
-    `$1\n      if (groupSettings.antiwalink && !msg.key.fromMe && _hasText) {\n        let waLinkHandled = false;\n        try {\n          waLinkHandled = await require('./utils/featurePackRuntime').handleAntiwalink(sock, msg, groupMetadata);\n        } catch (_) {}\n        if (waLinkHandled) return;\n      }`,
-    'ancre AntiWaLink'
+  lines = linesOf(src);
+  const i = findUniqueLine(
+    lines,
+    line => line.includes('groupSettings.antigroupmention') && line.includes('handleAntigroupmention(sock, msg, groupMetadata)'),
+    'ancre AntiWaLink après antigroupmention'
   );
+  const indent = (lines[i].match(/^\s*/) || ['      '])[0];
+  const block = [
+    `${indent}if (groupSettings.antiwalink && !msg.key.fromMe) {`,
+    `${indent}  let waLinkHandled = false;`,
+    `${indent}  try {`,
+    `${indent}    waLinkHandled = await require('./utils/featurePackRuntime').handleAntiwalink(sock, msg, groupMetadata);`,
+    `${indent}  } catch (_) {}`,
+    `${indent}  if (waLinkHandled) return;`,
+    `${indent}}`,
+  ];
+  lines.splice(i + 1, 0, ...block);
+  src = lines.join('\n');
 }
 
 fs.writeFileSync(handlerPath, src, 'utf8');
@@ -95,10 +145,16 @@ for (const invariant of [
   if (!final.includes(invariant)) throw new Error('[feature-pack] invariant absent: ' + invariant);
 }
 
-const groupPos = final.indexOf(GROUP_MARKER);
-const nonCommandPos = final.indexOf('if (!isCommand) return;');
-if (groupPos < 0 || nonCommandPos < 0 || groupPos > nonCommandPos) {
-  throw new Error('[feature-pack] @all reste placé après le retour non-commande');
+for (const marker of [GROUP_MARKER, PRESENCE_MARKER]) {
+  const count = final.split(marker).length - 1;
+  if (count !== 1) throw new Error(`[feature-pack] marqueur dupliqué ${marker}: ${count}`);
 }
 
-console.log('[feature-pack] ✅ présence auto + @all admin + antiwalink branchés avec ancres structurelles');
+// @all doit être avant le premier retour explicite réservé aux non-commandes.
+const groupPos = final.indexOf(GROUP_MARKER);
+const firstNonCommandReturn = final.indexOf('if (!isCommand) return;');
+if (groupPos < 0 || (firstNonCommandReturn >= 0 && groupPos > firstNonCommandReturn)) {
+  throw new Error(`[feature-pack] @all trop tard dans le pipeline (group=${groupPos}, firstReturn=${firstNonCommandReturn})`);
+}
+
+console.log('[feature-pack] ✅ @all avant AutoReply + présence auto + antiwalink branchés');
