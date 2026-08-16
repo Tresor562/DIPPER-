@@ -1,15 +1,7 @@
 /**
- * ╔══════════════════════════════════════════════════════════════╗
- * ║        𝐃𝐈𝐏𝐏𝐄𝐑 — MEMORY GUARD v1.0                         ║
- * ║        Surveillance & nettoyage intelligent de la RAM       ║
- * ╚══════════════════════════════════════════════════════════════╝
- *
- * Le nettoyage mémoire ne recharge jamais les modules du bot : commandes,
- * handlers, sessions et utils gardent une seule instance pendant tout le
- * cycle de vie du process. Le nettoyage doux se limite aux fichiers temp et
- * au GC V8, ce qui évite les états dupliqués créés par require.cache.
+ * 𝐃𝐈𝐏𝐏𝐄𝐑 — MEMORY GUARD
+ * Surveillance RAM + habillage global des réponses WhatsApp.
  */
-
 'use strict';
 
 const fs   = require('fs');
@@ -31,9 +23,67 @@ let _lastCpuTime       = Date.now();
 let _sockRef           = null;
 let _isRestartPending  = false;
 let _cleanupCount      = 0;
+let _brandingThumb     = null;
+
+const BRAND_TITLE = '𝐌ꝛ⥔𝕿𝖗𝖊𝖘𝖔𝖗 🌹';
+const BRAND_BODY  = config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑';
+const BRAND_URL   = config.social?.whatsappChannel || 'https://whatsapp.com/';
+
+function getBrandingThumb() {
+  if (_brandingThumb) return _brandingThumb;
+  try {
+    _brandingThumb = fs.readFileSync(path.join(__dirname, '..', 'assets', 'dipper_reply_thumb.jpg'));
+  } catch (err) {
+    _warn('[ReplyBranding] miniature introuvable:', err.message);
+    _brandingThumb = null;
+  }
+  return _brandingThumb;
+}
+
+function shouldBrandPayload(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (payload.contextInfo) return false; // ping/menu et réponses déjà enrichies restent intactes
+  if (payload.react || payload.delete || payload.edit) return false;
+  if (payload.sticker || payload.contacts || payload.location || payload.poll) return false;
+  return Boolean(payload.text || payload.image || payload.video || payload.audio || payload.document);
+}
+
+function addReplyBranding(payload) {
+  if (!shouldBrandPayload(payload)) return payload;
+  const thumb = getBrandingThumb();
+  if (!thumb) return payload;
+
+  return {
+    ...payload,
+    contextInfo: {
+      externalAdReply: {
+        title: BRAND_TITLE,
+        body: BRAND_BODY,
+        thumbnail: thumb,
+        sourceUrl: BRAND_URL,
+        mediaUrl: BRAND_URL,
+        mediaType: 1,
+        renderLargerThumbnail: false,
+        showAdAttribution: false,
+      },
+    },
+  };
+}
+
+function installReplyBranding(sock) {
+  if (!sock || sock.__dipperReplyBrandingInstalled) return;
+  sock.__dipperReplyBrandingInstalled = true;
+
+  const originalSendMessage = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (jid, payload, options) => {
+    const branded = addReplyBranding(payload);
+    return originalSendMessage(jid, branded, options);
+  };
+}
 
 function setSock(sock) {
   _sockRef = sock;
+  installReplyBranding(sock);
 }
 
 function getCpuPercent() {
@@ -68,7 +118,6 @@ function cleanTempFiles() {
       for (const file of fs.readdirSync(tempDir)) {
         const ext = path.extname(file).toLowerCase();
         if (!TEMP_EXTS.has(ext)) continue;
-
         const filePath = path.join(tempDir, file);
         try {
           const stat = fs.statSync(filePath);
@@ -126,7 +175,6 @@ async function notifyOwnerBeforeRestart(memMB, cfg) {
 }
 
 async function triggerGracefulRestart(memMB, cfg) {
-  // Anti-spam : pas 2 restarts en moins de 3 minutes
   const now = Date.now();
   if (_isRestartPending || (now - _lastRestartTime) < 3 * 60 * 1000) {
     _warn(`[MemoryGuard] ⏸ Restart annulé — dernier restart il y a ${Math.round((now - _lastRestartTime) / 1000)}s`);
