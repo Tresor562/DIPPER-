@@ -1,102 +1,24 @@
 'use strict';
-
-const axios = require('axios');
-const engine = require('../../utils/downloadEngine');
-
-const CAT = '📥 DOWNLOAD / FILE TOOLS';
-const UA = 'THE_BIG_DIPPER/1.0';
-
-function packageFromUrl(url) {
-  try {
-    const u = new URL(url);
-    const parts = u.pathname.split('/').filter(Boolean);
-    const i = parts.indexOf('packages');
-    return i >= 0 ? parts[i + 1] : null;
-  } catch { return null; }
-}
-
-async function searchApps(query) {
-  const q = String(query || '').trim();
-  if (!q) throw new Error('Nom d’application requis.');
-  const res = await axios.get('https://search.f-droid.org/api/search_apps', {
-    params: { q }, timeout: 25000, headers: { 'User-Agent': UA }
-  });
-  return Array.isArray(res.data?.apps) ? res.data.apps : [];
-}
-
-async function packageInfo(pkg) {
-  const p = String(pkg || '').trim();
-  if (!p) throw new Error('Package Android requis.');
-  const res = await axios.get(`https://f-droid.org/api/v1/packages/${encodeURIComponent(p)}`, { timeout: 25000, headers: { 'User-Agent': UA } });
-  return res.data;
-}
-
-async function resolveApp(query) {
-  const raw = String(query || '').trim();
-  if (/^[a-zA-Z][\w]*(?:\.[\w]+){1,}$/.test(raw)) return { packageName: raw, name: raw, summary: '' };
-  const apps = await searchApps(raw);
-  if (!apps.length) throw new Error('Aucune application F-Droid trouvée.');
-  const app = apps[0];
-  const packageName = packageFromUrl(app.url);
-  if (!packageName) throw new Error('Package F-Droid introuvable.');
-  return { ...app, packageName };
-}
-
-async function sendApk(sock, msg, extra, query, requestedVersionCode) {
-  const { reply, from } = extra;
-  try {
-    const app = await resolveApp(query);
-    const info = await packageInfo(app.packageName);
-    const packages = Array.isArray(info.packages) ? info.packages : [];
-    let v = requestedVersionCode ? packages.find(x => String(x.versionCode) === String(requestedVersionCode)) : null;
-    if (!v) v = packages.find(x => Number(x.versionCode) === Number(info.suggestedVersionCode)) || packages[0];
-    if (!v) throw new Error('Aucune version APK publiée pour cette application.');
-    const apkUrl = `https://f-droid.org/repo/${encodeURIComponent(app.packageName)}_${encodeURIComponent(v.versionCode)}.apk`;
-    await reply(`📱 *APK F-Droid*\n\n📦 ${app.name || app.packageName}\n🆔 ${app.packageName}\n🏷️ ${v.versionName || '?'} (${v.versionCode})\n⬇️ Téléchargement…`);
-    const got = await engine.download(apkUrl, { fileName: `${app.packageName}_${v.versionCode}.apk` });
-    try {
-      const data = require('fs').readFileSync(got.file);
-      await sock.sendMessage(from, { document: data, mimetype: 'application/vnd.android.package-archive', fileName: got.fileName, caption: `📱 *${app.name || app.packageName}*\n🏷️ ${v.versionName || v.versionCode}\n🔐 Source : F-Droid public` }, from?.endsWith('@g.us') ? { quoted: msg } : undefined);
-    } finally { engine.cleanup(got.file); }
-  } catch (e) { await reply(`❌ *APK Tools*\n${String(e.response?.data?.message || e.message || e).slice(0,600)}`); }
-}
-
-const commands = [];
-commands.push({
-  name:'apksearch', aliases:['fdroid'], category:CAT, description:'Rechercher des applications Android libres sur F-Droid', usage:'.apksearch <nom>',
-  async execute(sock,msg,args,extra){ try{const apps=await searchApps(args.join(' ')); if(!apps.length)return extra.reply('🔎 Aucun résultat F-Droid.'); const text=apps.slice(0,10).map((a,i)=>`${i+1}. *${a.name}*\n   ${packageFromUrl(a.url)||'?'}\n   ${a.summary||''}`).join('\n\n'); await extra.reply(`📱 *Recherche F-Droid*\n\n${text}`);}catch(e){await extra.reply(`❌ ${e.message}`);} }
-});
-commands.push({
-  name:'apk', aliases:[], category:CAT, description:'Rechercher puis télécharger la version suggérée depuis F-Droid', usage:'.apk <nom ou package>',
-  async execute(sock,msg,args,extra){ return sendApk(sock,msg,extra,args.join(' ')); }
-});
-commands.push({
-  name:'apkdl', aliases:[], category:CAT, description:'Télécharger un APK F-Droid par package et versionCode', usage:'.apkdl <package> [versionCode]',
-  async execute(sock,msg,args,extra){ return sendApk(sock,msg,extra,args[0],args[1]); }
-});
-commands.push({
-  name:'apkinfo', aliases:['appinfo'], category:CAT, description:'Informations et versions d’une app F-Droid', usage:'.apkinfo <nom ou package>',
-  async execute(sock,msg,args,extra){ try{const app=await resolveApp(args.join(' '));const info=await packageInfo(app.packageName);const versions=(info.packages||[]).slice(0,8).map(v=>`• ${v.versionName||'?'} — code ${v.versionCode}${Number(v.versionCode)===Number(info.suggestedVersionCode)?' ✅':''}`).join('\n');await extra.reply(`📱 *${app.name||app.packageName}*\n\n🆔 ${app.packageName}\n📝 ${app.summary||'N/A'}\n🏷️ Version suggérée : ${info.suggestedVersionCode||'N/A'}\n\n${versions||'Aucune version.'}`);}catch(e){await extra.reply(`❌ ${e.message}`);} }
-});
-commands.push({
-  name:'apkversion', aliases:['appversion'], category:CAT, description:'Afficher les versions d’une app F-Droid', usage:'.apkversion <nom ou package>',
-  async execute(sock,msg,args,extra){ try{const app=await resolveApp(args.join(' '));const info=await packageInfo(app.packageName);await extra.reply(`🏷️ *Versions — ${app.name||app.packageName}*\n\n${(info.packages||[]).slice(0,15).map(v=>`• ${v.versionName||'?'} (${v.versionCode})`).join('\n')||'Aucune version.'}`);}catch(e){await extra.reply(`❌ ${e.message}`);} }
-});
-commands.push({
-  name:'package', aliases:[], category:CAT, description:'Trouver le package Android d’une app F-Droid', usage:'.package <nom>',
-  async execute(sock,msg,args,extra){ try{const app=await resolveApp(args.join(' '));await extra.reply(`📦 *Package Android*\n${app.name||''}\n\`${app.packageName}\``);}catch(e){await extra.reply(`❌ ${e.message}`);} }
-});
-commands.push({
-  name:'appicon', aliases:[], category:CAT, description:'Récupérer l’icône publique d’une app F-Droid', usage:'.appicon <nom>',
-  async execute(sock,msg,args,extra){ try{const app=await resolveApp(args.join(' '));if(!app.icon)throw new Error('Icône indisponible.');await engine.assertPublicUrl(app.icon);await sock.sendMessage(extra.from,{image:{url:app.icon},caption:`📱 *${app.name}*\n🆔 ${app.packageName}`},{quoted:msg});}catch(e){await extra.reply(`❌ ${e.message}`);} }
-});
-commands.push({
-  name:'apksum', aliases:['apkverify'], category:CAT, description:'Télécharger un APK F-Droid et calculer SHA-256', usage:'.apksum <package>',
-  async execute(sock,msg,args,extra){ try{const app=await resolveApp(args[0]);const info=await packageInfo(app.packageName);const v=(info.packages||[]).find(x=>Number(x.versionCode)===Number(info.suggestedVersionCode))||(info.packages||[])[0];if(!v)throw new Error('Version introuvable.');const got=await engine.download(`https://f-droid.org/repo/${encodeURIComponent(app.packageName)}_${v.versionCode}.apk`);try{const h=require('crypto').createHash('sha256').update(require('fs').readFileSync(got.file)).digest('hex');await extra.reply(`🔐 *APK SHA-256*\n\n📦 ${app.packageName}\n🏷️ ${v.versionName||v.versionCode}\n\`${h}\``);}finally{engine.cleanup(got.file);}}catch(e){await extra.reply(`❌ ${e.message}`);} }
-});
-
-for (const name of ['splitapkinfo','xapkinfo','verifyapk','extractapk','certinfo']) {
-  commands.push({name,aliases:[],category:CAT,description:'Analyse locale APK/XAPK',usage:`.${name} (répondre à un fichier)`,async execute(sock,msg,args,extra){await extra.reply(`🧩 *${name}* : le moteur de téléchargement APK est actif. L’analyse locale approfondie des APK/XAPK sera ajoutée avec le parseur de manifeste/signature Android.`);}});
-}
-
-module.exports = commands;
+const fs=require('fs');const os=require('os');const path=require('path');const axios=require('axios');const engine=require('../../utils/downloadEngine');const fileLab=require('../../utils/fileLabEngine');const analyzer=require('../../utils/apkAnalyzer');
+const CAT='📥 DOWNLOAD / FILE TOOLS',UA='THE_BIG_DIPPER/1.0';
+function packageFromUrl(url){try{const u=new URL(url),p=u.pathname.split('/').filter(Boolean),i=p.indexOf('packages');return i>=0?p[i+1]:null}catch{return null}}
+async function searchApps(query){const q=String(query||'').trim();if(!q)throw new Error('Nom d’application requis.');const r=await axios.get('https://search.f-droid.org/api/search_apps',{params:{q},timeout:25000,headers:{'User-Agent':UA}});return Array.isArray(r.data?.apps)?r.data.apps:[]}
+async function packageInfo(pkg){const p=String(pkg||'').trim();if(!p)throw new Error('Package Android requis.');return(await axios.get(`https://f-droid.org/api/v1/packages/${encodeURIComponent(p)}`,{timeout:25000,headers:{'User-Agent':UA}})).data}
+async function resolveApp(query){const raw=String(query||'').trim();if(/^[a-zA-Z][\w]*(?:\.[\w]+){1,}$/.test(raw))return{packageName:raw,name:raw,summary:''};const apps=await searchApps(raw);if(!apps.length)throw new Error('Aucune application F-Droid trouvée.');const app=apps[0],packageName=packageFromUrl(app.url);if(!packageName)throw new Error('Package F-Droid introuvable.');return{...app,packageName}}
+async function sendApk(sock,msg,extra,query,requestedVersionCode){const{reply,from}=extra;try{const app=await resolveApp(query),info=await packageInfo(app.packageName),packs=Array.isArray(info.packages)?info.packages:[];let v=requestedVersionCode?packs.find(x=>String(x.versionCode)===String(requestedVersionCode)):null;if(!v)v=packs.find(x=>Number(x.versionCode)===Number(info.suggestedVersionCode))||packs[0];if(!v)throw new Error('Aucune version APK publiée.');const url=`https://f-droid.org/repo/${encodeURIComponent(app.packageName)}_${encodeURIComponent(v.versionCode)}.apk`;await reply(`📱 *APK F-Droid*\n📦 ${app.name||app.packageName}\n🆔 ${app.packageName}\n🏷️ ${v.versionName||'?'} (${v.versionCode})\n⬇️ Téléchargement…`);const got=await engine.download(url,{fileName:`${app.packageName}_${v.versionCode}.apk`});try{await sock.sendMessage(from,{document:fs.readFileSync(got.file),mimetype:'application/vnd.android.package-archive',fileName:got.fileName,caption:`📱 *${app.name||app.packageName}*\n🏷️ ${v.versionName||v.versionCode}\n🔐 Source : F-Droid public`},from?.endsWith('@g.us')?{quoted:msg}:undefined)}finally{engine.cleanup(got.file)}}catch(e){await reply(`❌ *APK Tools*\n${String(e.response?.data?.message||e.message||e).slice(0,700)}`)}}
+const commands=[];
+commands.push({name:'apksearch',aliases:['fdroid'],category:CAT,description:'Rechercher des applications Android libres sur F-Droid',usage:'.apksearch <nom>',async execute(sock,msg,args,extra){try{const apps=await searchApps(args.join(' '));if(!apps.length)return extra.reply('🔎 Aucun résultat F-Droid.');await extra.reply(`📱 *Recherche F-Droid*\n\n${apps.slice(0,10).map((a,i)=>`${i+1}. *${a.name}*\n   ${packageFromUrl(a.url)||'?'}\n   ${a.summary||''}`).join('\n\n')}`)}catch(e){await extra.reply(`❌ ${e.message}`)}}});
+commands.push({name:'apk',aliases:[],category:CAT,description:'Rechercher puis télécharger la version suggérée depuis F-Droid',usage:'.apk <nom ou package>',async execute(sock,msg,args,extra){return sendApk(sock,msg,extra,args.join(' '))}});
+commands.push({name:'apkdl',aliases:[],category:CAT,description:'Télécharger un APK F-Droid par package et versionCode',usage:'.apkdl <package> [versionCode]',async execute(sock,msg,args,extra){return sendApk(sock,msg,extra,args[0],args[1])}});
+commands.push({name:'apkinfo',aliases:['appinfo'],category:CAT,description:'Informations et versions d’une app F-Droid',usage:'.apkinfo <nom ou package>',async execute(sock,msg,args,extra){try{const app=await resolveApp(args.join(' ')),info=await packageInfo(app.packageName),versions=(info.packages||[]).slice(0,8).map(v=>`• ${v.versionName||'?'} — code ${v.versionCode}${Number(v.versionCode)===Number(info.suggestedVersionCode)?' ✅':''}`).join('\n');await extra.reply(`📱 *${app.name||app.packageName}*\n🆔 ${app.packageName}\n📝 ${app.summary||'N/A'}\n🏷️ Version suggérée : ${info.suggestedVersionCode||'N/A'}\n\n${versions||'Aucune version.'}`)}catch(e){await extra.reply(`❌ ${e.message}`)}}});
+commands.push({name:'apkversion',aliases:['appversion'],category:CAT,description:'Afficher les versions d’une app F-Droid',usage:'.apkversion <nom ou package>',async execute(sock,msg,args,extra){try{const app=await resolveApp(args.join(' ')),info=await packageInfo(app.packageName);await extra.reply(`🏷️ *Versions — ${app.name||app.packageName}*\n\n${(info.packages||[]).slice(0,15).map(v=>`• ${v.versionName||'?'} (${v.versionCode})`).join('\n')||'Aucune version.'}`)}catch(e){await extra.reply(`❌ ${e.message}`)}}});
+commands.push({name:'package',aliases:[],category:CAT,description:'Trouver le package Android d’une app F-Droid',usage:'.package <nom>',async execute(sock,msg,args,extra){try{const app=await resolveApp(args.join(' '));await extra.reply(`📦 *Package Android*\n${app.name||''}\n\`${app.packageName}\``)}catch(e){await extra.reply(`❌ ${e.message}`)}}});
+commands.push({name:'appicon',aliases:[],category:CAT,description:'Récupérer l’icône publique d’une app F-Droid',usage:'.appicon <nom>',async execute(sock,msg,args,extra){try{const app=await resolveApp(args.join(' '));if(!app.icon)throw new Error('Icône indisponible.');await engine.assertPublicUrl(app.icon);await sock.sendMessage(extra.from,{image:{url:app.icon},caption:`📱 *${app.name}*\n🆔 ${app.packageName}`},{quoted:msg})}catch(e){await extra.reply(`❌ ${e.message}`)}}});
+commands.push({name:'apksum',aliases:[],category:CAT,description:'Télécharger un APK F-Droid et calculer SHA-256',usage:'.apksum <package>',async execute(sock,msg,args,extra){try{const app=await resolveApp(args[0]),info=await packageInfo(app.packageName),v=(info.packages||[]).find(x=>Number(x.versionCode)===Number(info.suggestedVersionCode))||(info.packages||[])[0];if(!v)throw new Error('Version introuvable.');const got=await engine.download(`https://f-droid.org/repo/${encodeURIComponent(app.packageName)}_${v.versionCode}.apk`);try{const h=require('crypto').createHash('sha256').update(fs.readFileSync(got.file)).digest('hex');await extra.reply(`🔐 *APK SHA-256*\n📦 ${app.packageName}\n🏷️ ${v.versionName||v.versionCode}\n\`${h}\``)}finally{engine.cleanup(got.file)}}catch(e){await extra.reply(`❌ ${e.message}`)}}});
+async function localInput(msg,extra,fn){let i;try{i=await fileLab.getInput(msg);return await fn(i)}catch(e){await extra.reply(`❌ *APK Analyzer*\n${String(e.message||e).slice(0,700)}`)}finally{fileLab.cleanup(i?.file)}}
+commands.push({name:'splitapkinfo',aliases:['localapkinfo'],category:CAT,description:'Analyser localement un APK cité',usage:'.splitapkinfo',async execute(sock,msg,args,extra){return localInput(msg,extra,async i=>{const a=await analyzer.analyze(i.file,i.name);await extra.reply(`🧩 *APK local*\n📦 ${a.name||'N/A'}\n🆔 ${a.packageName||'N/A'}\n🏷️ ${a.versionName||'?'} (${a.versionCode||'?'})\n🤖 SDK min/target : ${a.minSdk||'?'} / ${a.targetSdk||'?'}\n🧬 DEX : ${a.dexCount}\n🏗️ ABI : ${a.abis.join(', ')||'aucune native'}\n📁 Fichiers : ${a.fileCount}\n🔏 Signature : ${a.signature.v1?'v1 ':''}${a.signature.v2plus?'v2+':''||'non détectée'}`)})}});
+commands.push({name:'xapkinfo',aliases:['apksinfo'],category:CAT,description:'Analyser localement un XAPK/APKS cité',usage:'.xapkinfo',async execute(sock,msg,args,extra){return localInput(msg,extra,async i=>{const a=analyzer.parseXapk(i.file);await extra.reply(`📦 *${a.type}*\n🆔 ${a.packageName||'N/A'}\n📱 ${a.name||'N/A'}\n🏷️ ${a.versionName||'?'} (${a.versionCode||'?'})\n🧩 APK inclus : ${a.apkFiles.length}\n💾 OBB : ${a.obbFiles.length}\n📁 Fichiers : ${a.fileCount}\n\n${a.apkFiles.slice(0,10).map(x=>`• ${x.name} — ${(x.bytes/1048576).toFixed(2)} Mo`).join('\n')}`)})}});
+commands.push({name:'verifyapk',aliases:['apkverify'],category:CAT,description:'Vérifier structure, hash et signature d’un APK/XAPK cité',usage:'.verifyapk',async execute(sock,msg,args,extra){return localInput(msg,extra,async i=>{const v=analyzer.verify(i.file,i.name);await extra.reply(`🔐 *Vérification ${v.kind}*\nÉtat : ${v.valid?'✅ structure valide':'⚠️ structure incomplète'}\nSHA-256 : \`${v.sha256}\`\n\n${Object.entries(v.checks).map(([k,x])=>`${x?'✅':'❌'} ${k}`).join('\n')}`)})}});
+commands.push({name:'certinfo',aliases:['apksignature'],category:CAT,description:'Afficher les empreintes de signature APK',usage:'.certinfo',async execute(sock,msg,args,extra){return localInput(msg,extra,async i=>{const s=analyzer.signatureSummary(i.file);await extra.reply(`🪪 *Signature APK*\nV1/JAR : ${s.v1?'✅':'❌'}\nBloc v2+ : ${s.v2plus?'✅':'❌'}\nSHA-256 APK : \`${s.sha256}\`\n\n${s.certFiles.map(c=>`• ${c.name}\n  ${c.sha256}`).join('\n')||'Aucun certificat META-INF détecté.'}`)})}});
+commands.push({name:'extractapk',aliases:['unapk'],category:CAT,description:'Extraire les fichiers principaux d’un APK/XAPK',usage:'.extractapk',async execute(sock,msg,args,extra){let i,d,files=[];try{i=await fileLab.getInput(msg);d=fs.mkdtempSync(path.join(os.tmpdir(),'dipper-apk-'));files=analyzer.extract(i.file,d);for(const f of files.slice(0,12))await sock.sendMessage(extra.from,{document:fs.readFileSync(f),fileName:path.basename(f),mimetype:'application/octet-stream'},{quoted:msg});if(files.length>12)await extra.reply(`ℹ️ ${files.length-12} fichier(s) supplémentaires non envoyés.`)}catch(e){await extra.reply(`❌ ${e.message}`)}finally{fileLab.cleanup(i?.file,d)}}});
+module.exports=commands;
