@@ -1,79 +1,13 @@
 'use strict';
 
-function render(template, ctx = {}) {
-  const args = Array.isArray(ctx.args) ? ctx.args : [];
-  const values = {
-    user: ctx.userName || ctx.userId || 'utilisateur',
-    userId: ctx.userId || '',
-    chatId: ctx.chatId || '',
-    args: args.join(' '),
-    arg1: args[0] || '',
-    arg2: args[1] || '',
-    arg3: args[2] || ''
-  };
-  return String(template || '').replace(/\{(user|userId|chatId|args|arg1|arg2|arg3)\}/g, (_, key) => String(values[key] ?? ''));
-}
-
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-async function executeWorkflow(workflow, ctx = {}) {
-  if (!workflow || typeof workflow !== 'object') return { handled: false };
-  const send = ctx.send;
-  if (typeof send !== 'function') return { handled: false };
-
-  if (workflow.type === 'reply') {
-    await send(render(workflow.text, ctx));
-    return { handled: true, steps: 1 };
-  }
-
-  if (workflow.type === 'random_reply') {
-    const choices = (workflow.choices || []).filter(x => typeof x === 'string' && x.trim()).slice(0, 30);
-    if (!choices.length) return { handled: false };
-    const picked = choices[Math.floor(Math.random() * choices.length)];
-    await send(render(picked, ctx));
-    return { handled: true, steps: 1 };
-  }
-
-  if (workflow.type === 'sequence') {
-    const steps = Array.isArray(workflow.steps) ? workflow.steps.slice(0, 12) : [];
-    let done = 0;
-    for (const step of steps) {
-      if (!step || typeof step !== 'object') continue;
-      if (step.type === 'reply') {
-        await send(render(step.text, ctx));
-        done += 1;
-      } else if (step.type === 'random_reply') {
-        const choices = (step.choices || []).filter(x => typeof x === 'string' && x.trim()).slice(0, 20);
-        if (choices.length) {
-          await send(render(choices[Math.floor(Math.random() * choices.length)], ctx));
-          done += 1;
-        }
-      } else if (step.type === 'wait') {
-        const ms = Math.max(0, Math.min(Number(step.ms) || 0, 10000));
-        if (ms) await sleep(ms);
-      }
-    }
-    return { handled: done > 0, steps: done };
-  }
-
-  return { handled: false };
-}
-
-function parseWorkflowIntent(text = '') {
-  const value = String(text).trim();
-  let m = value.match(/cr[ée]e?\s+(?:une\s+)?commande\s+([a-z0-9_-]{2,30})\s+qui\s+r[ée]pond\s+al[ée]atoirement\s+(.+)/i);
-  if (m) {
-    const choices = m[2].split(/\s*\|\s*/).map(x => x.trim()).filter(Boolean).slice(0, 20);
-    if (choices.length >= 2) return { name: m[1].toLowerCase(), workflow: { type: 'random_reply', choices } };
-  }
-
-  m = value.match(/cr[ée]e?\s+(?:une\s+)?commande\s+([a-z0-9_-]{2,30})\s+qui\s+envoie\s+(.+)/i);
-  if (m && /\s*\|\s*/.test(m[2])) {
-    const parts = m[2].split(/\s*\|\s*/).map(x => x.trim()).filter(Boolean).slice(0, 10);
-    if (parts.length >= 2) return { name: m[1].toLowerCase(), workflow: { type: 'sequence', steps: parts.map(text => ({ type: 'reply', text })) } };
-  }
-
-  return null;
-}
-
-module.exports = { executeWorkflow, parseWorkflowIntent, render };
+const MAX_STEPS=24;
+function render(template,ctx={}){const args=Array.isArray(ctx.args)?ctx.args:[],values={user:ctx.userName||ctx.userId||'utilisateur',userId:ctx.userId||'',chatId:ctx.chatId||'',args:args.join(' '),arg1:args[0]||'',arg2:args[1]||'',arg3:args[2]||'',arg4:args[3]||'',arg5:args[4]||'',argc:String(args.length)};return String(template||'').replace(/\{(user|userId|chatId|args|arg1|arg2|arg3|arg4|arg5|argc)\}/g,(_,key)=>String(values[key]??''));}
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+function validateWorkflow(workflow,depth=0){const errors=[];if(!workflow||typeof workflow!=='object')return{ok:false,errors:['workflow absent']};if(depth>4)return{ok:false,errors:['profondeur excessive']};const allowed=new Set(['reply','random_reply','sequence','wait','if_arg','if_contains','repeat']);if(!allowed.has(workflow.type))errors.push(`type interdit: ${workflow.type}`);if(workflow.type==='reply'&&!String(workflow.text||'').trim())errors.push('texte vide');if(workflow.type==='random_reply'){const c=(workflow.choices||[]).filter(x=>typeof x==='string'&&x.trim());if(c.length<2)errors.push('au moins 2 choix requis');if(c.length>30)errors.push('trop de choix');}if(workflow.type==='wait'&&Number(workflow.ms)>30000)errors.push('attente > 30s interdite');if(workflow.type==='sequence'){const steps=Array.isArray(workflow.steps)?workflow.steps:[];if(!steps.length)errors.push('séquence vide');if(steps.length>MAX_STEPS)errors.push('trop d’étapes');for(const s of steps)errors.push(...validateWorkflow(s,depth+1).errors);}if(workflow.type==='repeat'){const times=Number(workflow.times)||0;if(times<1||times>10)errors.push('répétition hors limites');errors.push(...validateWorkflow(workflow.step,depth+1).errors);}if(workflow.type==='if_arg'||workflow.type==='if_contains'){if(workflow.then)errors.push(...validateWorkflow(workflow.then,depth+1).errors);if(workflow.else)errors.push(...validateWorkflow(workflow.else,depth+1).errors);}return{ok:errors.length===0,errors:[...new Set(errors)]};}
+async function executeStep(step,ctx,state){if(!step||typeof step!=='object')return;if(state.ops>=MAX_STEPS*3)throw new Error('workflow operation limit');state.ops++;const send=ctx.send;if(step.type==='reply'){await send(render(step.text,ctx));state.sent++;return;}if(step.type==='random_reply'){const choices=(step.choices||[]).filter(x=>typeof x==='string'&&x.trim()).slice(0,30);if(choices.length){await send(render(choices[Math.floor(Math.random()*choices.length)],ctx));state.sent++;}return;}if(step.type==='wait'){const ms=Math.max(0,Math.min(Number(step.ms)||0,30000));if(ms)await sleep(ms);return;}if(step.type==='sequence'){for(const s of(Array.isArray(step.steps)?step.steps.slice(0,MAX_STEPS):[]))await executeStep(s,ctx,state);return;}if(step.type==='repeat'){const times=Math.max(1,Math.min(Number(step.times)||1,10));for(let i=0;i<times;i++)await executeStep(step.step,{...ctx,iteration:i+1},state);return;}if(step.type==='if_arg'){const idx=Math.max(0,Math.min(4,Number(step.index)||0)),ok=Boolean((ctx.args||[])[idx]);const chosen=ok?step.then:step.else;if(chosen)await executeStep(chosen,ctx,state);return;}if(step.type==='if_contains'){const hay=String((ctx.args||[]).join(' ')).toLowerCase(),needle=String(step.value||'').toLowerCase();const chosen=needle&&hay.includes(needle)?step.then:step.else;if(chosen)await executeStep(chosen,ctx,state);}}
+async function executeWorkflow(workflow,ctx={}){if(typeof ctx.send!=='function')return{handled:false};const valid=validateWorkflow(workflow);if(!valid.ok)return{handled:false,error:'invalid_workflow',errors:valid.errors};const state={sent:0,ops:0};await executeStep(workflow,ctx,state);return{handled:state.sent>0,steps:state.sent,operations:state.ops};}
+function parseWait(raw=''){const m=String(raw).match(/^(\d+)\s*(ms|millisecondes?|s|sec|secondes?|m|min|minutes?)$/i);if(!m)return null;const n=Number(m[1]),u=m[2].toLowerCase();return Math.min(30000,u.startsWith('m')&&!u.startsWith('ms')?n*60000:u.startsWith('ms')?n:n*1000);}
+function parseWorkflowIntent(text=''){const value=String(text).trim();let m=value.match(/cr[ée]e?\s+(?:une\s+)?commande\s+([a-z0-9_-]{2,30})\s+qui\s+r[ée]pond\s+al[ée]atoirement\s+(.+)/i);if(m){const choices=m[2].split(/\s*\|\s*/).map(x=>x.trim()).filter(Boolean).slice(0,30);const w={type:'random_reply',choices};if(validateWorkflow(w).ok&&choices.length>=2)return{name:m[1].toLowerCase(),workflow:w};}
+  m=value.match(/cr[ée]e?\s+(?:une\s+)?commande\s+([a-z0-9_-]{2,30})\s+qui\s+(?:r[ée]pond|envoie)\s+(.+)/i);if(m){const name=m[1].toLowerCase(),body=m[2].trim();if(/\s*\|\s*/.test(body)){const parts=body.split(/\s*\|\s*/).map(x=>x.trim()).filter(Boolean).slice(0,MAX_STEPS),w={type:'sequence',steps:parts.map(x=>({type:'reply',text:x}))};if(validateWorkflow(w).ok)return{name,workflow:w};}const timed=body.split(/\s+Puis\s+|\s+puis\s+/i).map(x=>x.trim()).filter(Boolean);if(timed.length>1){const steps=[];for(const part of timed){const wm=part.match(/^(?:attend|attendre)\s+(.+)$/i);if(wm){const ms=parseWait(wm[1]);if(ms!=null)steps.push({type:'wait',ms});else steps.push({type:'reply',text:part});}else steps.push({type:'reply',text:part.replace(/^(?:envoie|reponds?|réponds?)\s+/i,'')});}const w={type:'sequence',steps};if(validateWorkflow(w).ok)return{name,workflow:w};}const w={type:'reply',text:body};if(validateWorkflow(w).ok)return{name,workflow:w};}
+  return null;}
+module.exports={executeWorkflow,parseWorkflowIntent,render,validateWorkflow,parseWait};
