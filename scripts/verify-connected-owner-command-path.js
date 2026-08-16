@@ -47,6 +47,12 @@ function listJs(dir) {
   return out;
 }
 
+function executeBlocksFromMe(executeFn) {
+  const source = Function.prototype.toString.call(executeFn);
+  return /if\s*\(\s*(?:msg\??\.key\??\.)?fromMe\s*\)\s*(?:return\b|\{\s*return\b)/m.test(source) ||
+    /if\s*\(\s*msg\??\.key\??\.fromMe\s*===\s*true\s*\)\s*(?:return\b|\{\s*return\b)/m.test(source);
+}
+
 const files = listJs(commandsDir);
 const commands = [];
 const loadErrors = [];
@@ -60,12 +66,6 @@ for (const file of files) {
     continue;
   }
 
-  const source = fs.readFileSync(file, 'utf8');
-  if (/if\s*\(\s*(?:msg\??\.key\??\.)?fromMe\s*\)\s*(?:return\b|\{\s*return\b)/m.test(source) ||
-      /if\s*\(\s*msg\??\.key\??\.fromMe\s*===\s*true\s*\)\s*(?:return\b|\{\s*return\b)/m.test(source)) {
-    ownerSelfBlockers.push(rel);
-  }
-
   let exported;
   try {
     delete require.cache[require.resolve(file)];
@@ -77,6 +77,14 @@ for (const file of files) {
 
   for (const command of (Array.isArray(exported) ? exported : [exported])) {
     if (!command || typeof command !== 'object' || !command.name || typeof command.execute !== 'function') continue;
+
+    // IMPORTANT : on inspecte uniquement la vraie fonction execute().
+    // Des helpers légitimes peuvent ignorer les messages fromMe (ex. cache
+    // antidelete) sans empêcher la commande elle-même de répondre à l'owner.
+    if (executeBlocksFromMe(command.execute)) {
+      ownerSelfBlockers.push(`${rel}#${command.name}`);
+    }
+
     commands.push({
       name: String(command.name),
       file: rel,
@@ -92,7 +100,7 @@ for (const file of files) {
 if (loadErrors.length) throw new Error('[owner-command-audit] commandes non chargeables:\n' + loadErrors.join('\n'));
 if (!commands.length) throw new Error('[owner-command-audit] aucune commande valide');
 if (ownerSelfBlockers.length) {
-  throw new Error('[owner-command-audit] commandes bloquant fromMe:\n' + ownerSelfBlockers.join('\n'));
+  throw new Error('[owner-command-audit] commandes bloquant fromMe dans execute():\n' + ownerSelfBlockers.join('\n'));
 }
 
 const canonical = new Set(commands.map(c => c.name.toLowerCase()));
@@ -120,5 +128,5 @@ fs.writeFileSync(path.join(ROOT, 'connected-owner-command-audit.json'), JSON.str
 
 console.log(`[owner-command-audit] ✅ ${commands.length} commandes canoniques + ${aliasCount} alias (${files.length} fichiers)`);
 console.log('[owner-command-audit] ✅ owner connecté reconnu sur bot principal et sous-sessions');
-console.log('[owner-command-audit] ✅ aucune commande ne bloque explicitement fromMe');
+console.log('[owner-command-audit] ✅ aucune fonction execute() ne bloque explicitement fromMe');
 console.log('[owner-command-audit] ✅ watchdog anti-silence actif pour chaque dispatch classique');
