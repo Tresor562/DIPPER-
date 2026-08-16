@@ -64,4 +64,6 @@ for (const file of [corePath, runtimePath]) {
   if (checked.status !== 0) throw new Error(`[exaucee-multigame] syntaxe invalide ${path.relative(ROOT, file)}: ${checked.stderr || checked.stdout}`);
 }
 
-console.log('[exaucee-multigame] ✅ multi-parties V2 + workflows dynamiques installés');
+// V3 s'installe après la V2 pour réutiliser ses hooks sans casser les jeux existants.
+require('./install-exaucee-mega-gamemaster');
+console.log('[exaucee-multigame] ✅ multi-parties V2 + workflows dynamiques + Mega GameMaster V3 installés');
