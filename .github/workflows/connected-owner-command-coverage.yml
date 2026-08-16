@@ -1,0 +1,68 @@
+name: Connected owner command coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'commands/**'
+      - 'handler.js'
+      - 'index.js'
+      - 'utils/sessionManager.js'
+      - 'scripts/install-response-style.js'
+      - 'scripts/prepare-command-response-guarantee.js'
+      - 'scripts/install-command-response-guarantee.js'
+      - 'scripts/prepare-connected-owner-session-path.js'
+      - 'scripts/verify-connected-owner-command-path.js'
+      - '.github/workflows/connected-owner-command-coverage.yml'
+  workflow_dispatch:
+
+jobs:
+  owner-command-path:
+    name: All commands answer connected owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install runtime dependencies without lifecycle scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Prepare paired-session owner path
+        run: node scripts/prepare-connected-owner-session-path.js
+
+      - name: Install central response watchdog
+        run: |
+          node scripts/install-response-style.js
+          node scripts/prepare-command-response-guarantee.js
+          node scripts/install-command-response-guarantee.js
+
+      - name: Validate command registry
+        run: node scripts/validate-commands.js
+
+      - name: Verify every command for connected owner
+        run: node scripts/verify-connected-owner-command-path.js
+
+      - name: Show exact coverage
+        run: |
+          node - <<'NODE'
+          const r = require('./connected-owner-command-audit.json');
+          console.log(`commands=${r.commandCount}`);
+          console.log(`aliases=${r.aliasCount}`);
+          console.log(`files=${r.commandFiles}`);
+          if (!r.connectedOwnerPath?.mainNotifyAndAppend ||
+              !r.connectedOwnerPath?.pairedNotifyAndAppend ||
+              !r.connectedOwnerPath?.fromMeRecognizedAsOwner ||
+              !r.connectedOwnerPath?.responseWatchdog ||
+              r.ownerSelfBlockers?.length) {
+            process.exit(1);
+          }
+          NODE
