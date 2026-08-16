@@ -60,7 +60,11 @@ const ownerSelfBlockers = [];
 
 for (const file of files) {
   const rel = path.relative(ROOT, file).replace(/\\/g, '/');
-  const syntax = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  const syntax = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', timeout: 15000 });
+  if (syntax.error) {
+    loadErrors.push(`${rel}: verification syntaxe impossible (${syntax.error.message})`);
+    continue;
+  }
   if (syntax.status !== 0) {
     loadErrors.push(`${rel}: syntaxe invalide`);
     continue;
@@ -130,3 +134,8 @@ console.log(`[owner-command-audit] ✅ ${commands.length} commandes canoniques +
 console.log('[owner-command-audit] ✅ owner connecté reconnu sur bot principal et sous-sessions');
 console.log('[owner-command-audit] ✅ aucune fonction execute() ne bloque explicitement fromMe');
 console.log('[owner-command-audit] ✅ watchdog anti-silence actif pour chaque dispatch classique');
+
+// Certains modules ouvrent des timers lors de require(). Les vérifications sont
+// toutes terminées à ce stade : sortir explicitement empêche ces timers de garder
+// le processus d'audit vivant jusqu'au timeout du build Render.
+process.exit(0);
