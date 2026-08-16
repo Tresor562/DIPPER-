@@ -57,14 +57,18 @@ if (!/name\s*:\s*['"]antiforward['"]/.test(protections)) throw new Error('[featu
 const groupMention = read('commands/group_management/antigroupmention.js');
 if (!/name\s*:\s*['"]antigroupmention['"]/.test(groupMention)) throw new Error('[feature-pack-static] antigroupmention historique absent');
 
+// Le runtime délègue la construction newsletter/externalAdReply à
+// connectionPresentation.buildConnectionContext(). On vérifie donc ici le
+// contrat de délégation et non des détails d'implémentation déplacés ailleurs.
 const runtime = read('utils/featurePackRuntime.js');
-for (const invariant of ['applyAutoPresence','handleAdminAtAll','handleAntiwalink','forwardedNewsletterMessageInfo','externalAdReply']) {
+for (const invariant of ['applyAutoPresence','handleAdminAtAll','handleAntiwalink','buildConnectionContext']) {
   if (!runtime.includes(invariant)) throw new Error(`[feature-pack-static] runtime invariant absent: ${invariant}`);
 }
 
 const presentation = read('utils/connectionPresentation.js');
-if (!presentation.includes('resolveOwnerProfileThumbnail')) throw new Error('[feature-pack-static] miniature owner absente');
-if (!presentation.includes('forwardedNewsletterMessageInfo')) throw new Error('[feature-pack-static] newsletter presentation absente');
+for (const invariant of ['resolveOwnerProfileThumbnail','forwardedNewsletterMessageInfo','externalAdReply']) {
+  if (!presentation.includes(invariant)) throw new Error(`[feature-pack-static] présentation connexion absente: ${invariant}`);
+}
 
 const footer = read('scripts/install-global-footer.js');
 for (const marker of ['menu','ping','welcomeMsg','goodbyeMsg']) {
