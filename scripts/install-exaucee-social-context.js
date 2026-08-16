@@ -15,15 +15,37 @@ function replaceOnce(source, from, to, label) {
   return source.replace(from, to);
 }
 
+function installSocialInstruction(source) {
+  if (source.includes(MARKER)) return source;
+
+  // Ancienne formulation du prompt.
+  const legacyAnchor = "      'Dans un groupe, ne monopolise pas la conversation. Réponds à la personne qui t’a réellement sollicitée et respecte les échanges humains.',";
+  if (source.includes(legacyAnchor)) {
+    return source.replace(
+      legacyAnchor,
+      `${legacyAnchor}\n      socialInstruction(context.social || {}, context.groupHistory || []), // ${MARKER}`
+    );
+  }
+
+  // Le moteur cognitif actuel a fusionné la consigne de groupe dans une phrase
+  // plus large. On s'ancre donc sur l'étape métacognitive, beaucoup plus stable,
+  // et on insère la consigne sociale juste avant elle.
+  const metaAnchor = "metacognitionInstruction(analysis.reasoningMode||'normal')";
+  if (source.includes(metaAnchor)) {
+    return source.replace(
+      metaAnchor,
+      `socialInstruction(context.social || {}, context.groupHistory || []), /* ${MARKER} */ ${metaAnchor}`
+    );
+  }
+
+  throw new Error('[exaucee-social] ancre introuvable: social instruction');
+}
+
 let cognition = fs.readFileSync(cognitionPath, 'utf8');
 if (!cognition.includes("require('./socialContext')")) {
   cognition = cognition.replace("'use strict';", "'use strict';\n\nconst { socialInstruction } = require('./socialContext');");
 }
-if (!cognition.includes(MARKER)) {
-  const anchor = "      'Dans un groupe, ne monopolise pas la conversation. Réponds à la personne qui t’a réellement sollicitée et respecte les échanges humains.',";
-  const replacement = `${anchor}\n      socialInstruction(context.social || {}, context.groupHistory || []), // ${MARKER}`;
-  cognition = replaceOnce(cognition, anchor, replacement, 'social instruction');
-}
+cognition = installSocialInstruction(cognition);
 fs.writeFileSync(cognitionPath, cognition, 'utf8');
 
 let runtime = fs.readFileSync(runtimePath, 'utf8');
