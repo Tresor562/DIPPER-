@@ -10,6 +10,7 @@ const {GeneralOrchestrator}=require('../ai_chat/cognition/generalOrchestrator');
 const {MemoryStore}=require('../ai_chat/memory/store');
 const {planQueries,sourceQuality}=require('../ai_chat/research/researchEngine');
 const {parseWorkflowIntent,validateWorkflow,executeWorkflow}=require('../ai_chat/dynamic/workflowEngine');
+const {groundedContext,conversationalFallback}=require('../ai_chat/ai/localBrain');
 
 class FakePrimary{
   constructor(){this.calls=[];this.localBrain={fallback:()=>({provider:'local',text:'fallback'})};}
@@ -43,4 +44,9 @@ test('workflow dynamique avancé est validé et exécuté sans code arbitraire',
   const parsed=parseWorkflowIntent('Crée une commande bienvenue qui envoie Salut {user} puis attend 1 seconde puis envoie Bienvenue {arg1}');
   assert.ok(parsed);assert.equal(validateWorkflow(parsed.workflow).ok,true);const sent=[];const r=await executeWorkflow(parsed.workflow,{userName:'Nexus',args:['ici'],send:async x=>sent.push(x)});assert.equal(r.handled,true);assert.equal(sent.length,2);assert.match(sent[0],/Nexus/);assert.match(sent[1],/ici/);
   assert.equal(validateWorkflow({type:'sequence',steps:Array.from({length:30},()=>({type:'reply',text:'x'}))}).ok,false);
+});
+
+test('fallback local récupère un fait pertinent au lieu de boucler génériquement',()=>{
+  const messages=[{role:'system',content:'Faits utiles mémorisés:\n- Le tournoi Naruto commence demain à 20h\n- La couleur préférée est bleue'},{role:'user',content:'À quelle heure commence le tournoi Naruto ?'}];
+  const rows=groundedContext(messages,'tournoi Naruto heure');assert.ok(rows.some(x=>/20h/.test(x)));assert.match(conversationalFallback(messages),/20h/);
 });
