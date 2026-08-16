@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('fs');const path=require('path');const{spawnSync}=require('child_process');
-const ROOT=path.join(__dirname,'..');const helperPath=path.join(ROOT,'utils','specialPresentation.js');const handlerPath=path.join(ROOT,'handler.js');const FOOTER='> Powered by 🌹 Mr Tresor 🌹';const MARKER='[TARGETED CONNECTION FOOTER 2026-08-16]';
+const ROOT=path.join(__dirname,'..');const helperPath=path.join(ROOT,'utils','specialPresentation.js');const handlerPath=path.join(ROOT,'handler.js');const animePath=path.join(ROOT,'commands','anime','anime.js');const FOOTER='> Powered by 🌹 Mr Tresor 🌹';const MARKER='[TARGETED CONNECTION FOOTER 2026-08-16]';
 for(const file of[helperPath,handlerPath])if(!fs.existsSync(file))throw new Error('[target-footer] fichier absent: '+path.relative(ROOT,file));
 let helper=fs.readFileSync(helperPath,'utf8');
 if(!helper.includes(MARKER)){
@@ -13,5 +13,16 @@ if(!helper.includes(MARKER)){
 let handler=fs.readFileSync(handlerPath,'utf8');
 function patchEvent(variable,marker){if(handler.includes(marker))return;const caption=`caption: ${variable},`;const text=`{ text: ${variable}, mentions: [participantJid] }`;const cc=handler.split(caption).length-1,tc=handler.split(text).length-1;if(cc!==1)throw new Error(`[target-footer] ${variable} caption attendu 1 fois, trouvé ${cc}`);if(tc!==1)throw new Error(`[target-footer] ${variable} fallback attendu 1 fois, trouvé ${tc}`);handler=handler.replace(caption,`caption: ${variable} + '\\n\\n${FOOTER}', // ${marker}`);handler=handler.replace(text,`{ text: ${variable} + '\\n\\n${FOOTER}', mentions: [participantJid] }`);}
 patchEvent('welcomeMsg','[WELCOME TARGETED CONNECTION FOOTER]');patchEvent('goodbyeMsg','[GOODBYE TARGETED CONNECTION FOOTER]');fs.writeFileSync(handlerPath,handler,'utf8');
-for(const file of[helperPath,handlerPath]){const c=spawnSync(process.execPath,['--check',file],{encoding:'utf8'});if(c.status!==0)throw new Error(`[target-footer] syntaxe ${path.relative(ROOT,file)}: ${c.stderr||c.stdout}`);}
-const finalHelper=fs.readFileSync(helperPath,'utf8'),finalHandler=fs.readFileSync(handlerPath,'utf8');if(!finalHelper.includes(MARKER))throw new Error('[target-footer] marqueur helper absent');if(!finalHandler.includes('[WELCOME TARGETED CONNECTION FOOTER]')||!finalHandler.includes('[GOODBYE TARGETED CONNECTION FOOTER]'))throw new Error('[target-footer] événements ciblés absents');console.log('[target-footer] ✅ footer connexion limité à menu/ping + événements welcome/goodbye');
+
+// Le wrapper Render copie une implémentation anime qui possède historiquement
+// son propre footer Powered. Les commandes anime ne font pas partie de la
+// liste autorisée : neutraliser uniquement cette constante si elle existe.
+if(fs.existsSync(animePath)){
+  let anime=fs.readFileSync(animePath,'utf8');
+  const legacy=`const FOOTER = '${FOOTER}';`;
+  if(anime.includes(legacy)) anime=anime.replace(legacy,`const FOOTER = ''; // [NON TARGET FOOTER CLEANUP]`);
+  fs.writeFileSync(animePath,anime,'utf8');
+}
+
+for(const file of[helperPath,handlerPath,...(fs.existsSync(animePath)?[animePath]:[])]){const c=spawnSync(process.execPath,['--check',file],{encoding:'utf8'});if(c.status!==0)throw new Error(`[target-footer] syntaxe ${path.relative(ROOT,file)}: ${c.stderr||c.stdout}`);}
+const finalHelper=fs.readFileSync(helperPath,'utf8'),finalHandler=fs.readFileSync(handlerPath,'utf8');if(!finalHelper.includes(MARKER))throw new Error('[target-footer] marqueur helper absent');if(!finalHandler.includes('[WELCOME TARGETED CONNECTION FOOTER]')||!finalHandler.includes('[GOODBYE TARGETED CONNECTION FOOTER]'))throw new Error('[target-footer] événements ciblés absents');if(fs.existsSync(animePath)&&fs.readFileSync(animePath,'utf8').includes(`const FOOTER = '${FOOTER}';`))throw new Error('[target-footer] footer anime non ciblé encore actif');console.log('[target-footer] ✅ footer connexion limité à menu/ping + événements welcome/goodbye');
