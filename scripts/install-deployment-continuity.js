@@ -22,27 +22,42 @@ function replaceOne(source, needle, replacement, label) {
   if (source.includes(replacement)) return source;
   const count = source.split(needle).length - 1;
   if (count === 0) {
-    console.log(`[continuity-install] ${label}: ancre déjà transformée ou absente, vérification sémantique`);
+    console.log(`[continuity-install] ${label}: ancre absente — étape ignorée, invariant vérifié ensuite`);
     return source;
   }
   if (count !== 1) throw new Error(`[continuity-install] ${label}: attendu 1 occurrence, trouvé ${count}`);
   return source.replace(needle, replacement);
 }
 
+function ensureRequire(src, requireExpr, declaration, marker, label) {
+  if (src.includes(requireExpr)) return src;
+  // Insérer après la dernière déclaration require du préambule plutôt que
+  // dépendre d'un import précis qui peut avoir été réordonné par d'autres patchs.
+  const lines = src.split('\n');
+  let lastRequire = -1;
+  for (let i = 0; i < Math.min(lines.length, 120); i++) {
+    if (/^const\s+.+?=\s*require\(.+\);\s*$/.test(lines[i].trim())) lastRequire = i;
+  }
+  if (lastRequire < 0) throw new Error(`[continuity-install] ${label}: aucun import require exploitable`);
+  lines.splice(lastRequire + 1, 0, `${declaration} // ${marker}`);
+  return lines.join('\n');
+}
+
 function patchApi() {
   let src = fs.readFileSync(API, 'utf8');
-
-  if (!src.includes("require('../utils/deploymentContinuity')")) {
-    const importNeedle = "const sessionManager = require('../utils/sessionManager');";
-    if (!src.includes(importNeedle)) throw new Error('[continuity-install] import sessionManager introuvable');
-    src = src.replace(importNeedle, importNeedle + "\nconst deploymentContinuity = require('../utils/deploymentContinuity'); // " + MARK_API);
-  }
+  src = ensureRequire(
+    src,
+    "require('../utils/deploymentContinuity')",
+    "const deploymentContinuity = require('../utils/deploymentContinuity');",
+    MARK_API,
+    'import API'
+  );
 
   if (!src.includes('deploymentContinuity.waitForOperational(90_000)')) {
     src = replaceOne(
       src,
       "    const result = await createPairingSession(phoneNumber, { requesterKey, origin, owner });\n    return sendJSON(res, 200, result);",
-      "    // Pendant le court handover d'un redéploiement, garder la requête HTTP\n    // ouverte au lieu de renvoyer une erreur au nouvel utilisateur.\n    const admitted = await deploymentContinuity.waitForOperational(90_000);\n    if (!admitted) {\n      return sendJSON(res, 503, { error: 'DEPLOYMENT_TRANSITION', message: 'Mise à jour en cours, réessaie dans quelques secondes.' });\n    }\n    const result = await deploymentContinuity.track(() =>\n      createPairingSession(phoneNumber, { requesterKey, origin, owner })\n    );\n    return sendJSON(res, 200, result);",
+      "    const admitted = await deploymentContinuity.waitForOperational(90_000);\n    if (!admitted) {\n      return sendJSON(res, 503, { error: 'DEPLOYMENT_TRANSITION', message: 'Mise à jour en cours, réessaie dans quelques secondes.' });\n    }\n    const result = await deploymentContinuity.track(() =>\n      createPairingSession(phoneNumber, { requesterKey, origin, owner })\n    );\n    return sendJSON(res, 200, result);",
       'pair admission'
     );
   }
@@ -65,7 +80,7 @@ function patchApi() {
     );
   }
 
-  if (!src.includes('deploymentContinuity')) throw new Error('[continuity-install] invariant API continuity absent');
+  if (!src.includes("require('../utils/deploymentContinuity')")) throw new Error('[continuity-install] invariant import API absent');
   writeChecked(API, src);
 }
 
@@ -74,7 +89,7 @@ function patchSessionManager() {
   if (!src.includes('async function prepareForDeployment()')) {
     const exportAnchor = "module.exports = {\n  startSession,";
     if (!src.includes(exportAnchor)) throw new Error('[continuity-install] exports sessionManager introuvables');
-    const addition = `\n/** ${MARK_SESSION}\n * Ferme toutes les connexions au moment où l'hébergeur retire l'instance.\n * Aucun logout n'est envoyé : les credentials restent valides et la nouvelle\n * instance peut reconnecter immédiatement les mêmes comptes.\n */\nasync function prepareForDeployment() {\n  const sessions = Array.from(activeSessions.values());\n  console.log(\`[SessionManager] 🔄 handover déploiement — \${sessions.length} session(s) à libérer\`);\n  for (const session of sessions) {\n    try {\n      session.isStopping = true;\n      _closeSession(session, 'handover déploiement');\n      sessionIndex.setState(session.sessionId, { isOnline: false }).catch(() => {});\n    } catch (err) {\n      console.error(\`[SessionManager] handover \${session.sessionId}:\`, err.message);\n    }\n  }\n  activeSessions.clear();\n  return sessions.length;\n}\n\n`;
+    const addition = `\n/** ${MARK_SESSION} */\nasync function prepareForDeployment() {\n  const sessions = Array.from(activeSessions.values());\n  console.log(\`[SessionManager] 🔄 handover déploiement — \${sessions.length} session(s) à libérer\`);\n  for (const session of sessions) {\n    try {\n      session.isStopping = true;\n      _closeSession(session, 'handover déploiement');\n      sessionIndex.setState(session.sessionId, { isOnline: false }).catch(() => {});\n    } catch (err) {\n      console.error(\`[SessionManager] handover \${session.sessionId}:\`, err.message);\n    }\n  }\n  activeSessions.clear();\n  return sessions.length;\n}\n\n`;
     src = src.replace(exportAnchor, addition + exportAnchor);
   }
   if (!src.includes('prepareForDeployment,')) {
@@ -86,9 +101,13 @@ function patchSessionManager() {
 
 function patchIndex() {
   let src = fs.readFileSync(INDEX, 'utf8');
-  if (!src.includes("require('./utils/deploymentContinuity')")) {
-    src = replaceOne(src, "const os      = require('os');", "const os      = require('os');\nconst deploymentContinuity = require('./utils/deploymentContinuity'); // " + MARK_INDEX, 'import index');
-  }
+  src = ensureRequire(
+    src,
+    "require('./utils/deploymentContinuity')",
+    "const deploymentContinuity = require('./utils/deploymentContinuity');",
+    MARK_INDEX,
+    'import index'
+  );
   if (!src.includes("deploymentContinuity.markBooting('launch-bot')")) {
     src = replaceOne(src, "async function launchBot() {\n  try {", "async function launchBot() {\n  deploymentContinuity.markBooting('launch-bot');\n  try {", 'boot marker');
   }
@@ -100,6 +119,7 @@ function patchIndex() {
     const graceful = `${globalAnchor}\n\n// ${MARK_INDEX}\ndeploymentContinuity.installShutdown(async () => {\n  try {\n    if (_sessionManager?.prepareForDeployment) await _sessionManager.prepareForDeployment();\n  } catch (err) {\n    originalConsoleError('[continuity] fermeture multi-session:', err.message);\n  }\n  try { stopMemoryGuard(); } catch (_) {}\n});`;
     src = replaceOne(src, globalAnchor, graceful, 'shutdown hook');
   }
+  if (!src.includes("require('./utils/deploymentContinuity')")) throw new Error('[continuity-install] invariant import index absent');
   writeChecked(INDEX, src);
 }
 
