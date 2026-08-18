@@ -48,7 +48,9 @@ if (!/SIMULATION TERMINÉE/.test(prank) || !/Aucun compte/.test(prank)) {
 
 const social = read('commands/social_media_download/socialsearch.js');
 for (const name of ['pinterest2','tiktoksearch','youtubesearch','soundcloudsearch','spotifysearch','bilibilisearch','instagramsearch','facebooksearch','xsearch']) {
-  if (!social.includes(`name:'${name}'`)) throw new Error(`[feature-pack-static] recherche sociale absente: ${name}`);
+  // Accepte aussi bien les anciens objets { name:'x' } que la factory command('x', ...).
+  const literalName = new RegExp(`(?:name\\s*:\\s*|command\\s*\\(\\s*)['\"]${name}['\"]`);
+  if (!literalName.test(social)) throw new Error(`[feature-pack-static] recherche sociale absente: ${name}`);
 }
 if (!social.includes('sendMediaCarousel')) throw new Error('[feature-pack-static] socialsearch sans carousel');
 
@@ -57,9 +59,6 @@ if (!/name\s*:\s*['"]antiforward['"]/.test(protections)) throw new Error('[featu
 const groupMention = read('commands/group_management/antigroupmention.js');
 if (!/name\s*:\s*['"]antigroupmention['"]/.test(groupMention)) throw new Error('[feature-pack-static] antigroupmention historique absent');
 
-// Le runtime délègue la construction newsletter/externalAdReply à
-// connectionPresentation.buildConnectionContext(). On vérifie donc ici le
-// contrat de délégation et non des détails d'implémentation déplacés ailleurs.
 const runtime = read('utils/featurePackRuntime.js');
 for (const invariant of ['applyAutoPresence','handleAdminAtAll','handleAntiwalink','buildConnectionContext']) {
   if (!runtime.includes(invariant)) throw new Error(`[feature-pack-static] runtime invariant absent: ${invariant}`);
