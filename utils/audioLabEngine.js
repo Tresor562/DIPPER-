@@ -18,21 +18,36 @@ function tmp(ext = 'bin') {
 
 function unwrap(message) {
   let m = message || {};
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
     if (m.ephemeralMessage?.message) { m = m.ephemeralMessage.message; continue; }
     if (m.viewOnceMessage?.message) { m = m.viewOnceMessage.message; continue; }
     if (m.viewOnceMessageV2?.message) { m = m.viewOnceMessageV2.message; continue; }
+    if (m.viewOnceMessageV2Extension?.message) { m = m.viewOnceMessageV2Extension.message; continue; }
     if (m.documentWithCaptionMessage?.message) { m = m.documentWithCaptionMessage.message; continue; }
     break;
   }
-  return m;
+  return m || {};
 }
 
-function mediaNode(msg) {
-  const own = unwrap(msg?.message);
-  const ctx = own?.extendedTextMessage?.contextInfo;
-  const quoted = unwrap(ctx?.quotedMessage);
-  const m = quoted && Object.keys(quoted).length ? quoted : own;
+function contextInfoOf(message) {
+  const m = unwrap(message);
+  return (
+    m.extendedTextMessage?.contextInfo ||
+    m.imageMessage?.contextInfo ||
+    m.videoMessage?.contextInfo ||
+    m.audioMessage?.contextInfo ||
+    m.documentMessage?.contextInfo ||
+    m.stickerMessage?.contextInfo ||
+    m.buttonsResponseMessage?.contextInfo ||
+    m.listResponseMessage?.contextInfo ||
+    m.templateButtonReplyMessage?.contextInfo ||
+    m.interactiveResponseMessage?.contextInfo ||
+    null
+  );
+}
+
+function findMedia(message) {
+  const m = unwrap(message);
   if (m.audioMessage) return { node: m.audioMessage, type: 'audio', ext: 'ogg' };
   if (m.videoMessage) return { node: m.videoMessage, type: 'video', ext: 'mp4' };
   if (m.documentMessage) {
@@ -41,6 +56,36 @@ function mediaNode(msg) {
       const ext = path.extname(m.documentMessage.fileName || '').replace('.', '') || (mime.startsWith('audio/') ? 'mp3' : 'mp4');
       return { node: m.documentMessage, type: 'document', ext };
     }
+  }
+  return null;
+}
+
+function mediaNode(msg) {
+  // 1) Toujours privilégier le média cité. Sur WhatsApp le contextInfo peut
+  // vivre dans plusieurs types de messages (texte, image, vidéo, document,
+  // message interactif...), pas uniquement dans extendedTextMessage.
+  const roots = [msg?._unwrappedMessage, msg?.message].filter(Boolean);
+  for (const root of roots) {
+    const ctx = contextInfoOf(root);
+    if (ctx?.quotedMessage) {
+      const quoted = findMedia(ctx.quotedMessage);
+      if (quoted) return quoted;
+    }
+  }
+
+  // 2) Compatibilité avec certains normaliseurs/versions Baileys qui exposent
+  // directement le message cité sous msg.quoted / msg.quotedMessage.
+  for (const candidate of [msg?.quoted?.message, msg?.quotedMessage, msg?.quoted]) {
+    if (!candidate) continue;
+    const quoted = findMedia(candidate);
+    if (quoted) return quoted;
+  }
+
+  // 3) Autoriser aussi l'effet lorsqu'il est lancé directement sur un message
+  // média portant la commande en légende.
+  for (const root of roots) {
+    const direct = findMedia(root);
+    if (direct) return direct;
   }
   return null;
 }
@@ -61,6 +106,7 @@ async function downloadInput(msg) {
   if (!info) throw new Error('Réponds à un audio, une musique ou une vidéo.');
   const stream = await downloadContentFromMessage(info.node, info.type);
   const buffer = await streamToBuffer(stream);
+  if (!buffer?.length) throw new Error('Le média cité est vide ou n’est plus téléchargeable.');
   const file = tmp(info.ext);
   fs.writeFileSync(file, buffer);
   return file;
@@ -77,7 +123,7 @@ function runFfmpeg(args, timeout = TIMEOUT_MS) {
 
 async function probeDuration(input) {
   try {
-    const { stdout } = await new Promise((resolve, reject) => {
+    const { stdout } = await new Promise((resolve) => {
       execFile(ffmpegPath, ['-hide_banner', '-i', input, '-f', 'null', '-'], { timeout: 20000 }, (err, stdout, stderr) => {
         const text = String(stderr || stdout || '');
         const m = text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
@@ -192,29 +238,29 @@ async function processAudio(input, operation, args = []) {
   }
   ff.push('-vn', '-c:a', 'libmp3lame', '-b:a', '192k', output);
   await runFfmpeg(ff);
-  const stat = fs.statSync(output);
-  if (stat.size > MAX_OUTPUT_BYTES) { fs.unlinkSync(output); throw new Error('Résultat trop volumineux pour WhatsApp.'); }
+  const st = fs.statSync(output);
+  if (st.size > MAX_OUTPUT_BYTES) throw new Error('Sortie audio trop volumineuse pour WhatsApp.');
   return output;
 }
 
 async function analyze(input) {
   const duration = await probeDuration(input);
-  const stat = fs.statSync(input);
-  return { duration, bytes: stat.size, mb: (stat.size / 1024 / 1024).toFixed(2) };
+  const st = fs.statSync(input);
+  return { duration, bytes: st.size, mb: (st.size / 1024 / 1024).toFixed(2) };
 }
 
 async function waveform(input) {
   const output = tmp('png');
-  await runFfmpeg(['-i', input, '-filter_complex', 'aformat=channel_layouts=mono,showwavespic=s=1200x400:colors=white', '-frames:v', '1', output]);
+  await runFfmpeg(['-i', input, '-filter_complex', 'showwavespic=s=1280x360:colors=white', '-frames:v', '1', output]);
   return output;
 }
 
 async function spectrogram(input) {
   const output = tmp('png');
-  await runFfmpeg(['-i', input, '-lavfi', 'showspectrumpic=s=1200x600:legend=1', '-frames:v', '1', output]);
+  await runFfmpeg(['-i', input, '-lavfi', 'showspectrumpic=s=1280x720:legend=disabled', '-frames:v', '1', output]);
   return output;
 }
 
-function cleanup(...files) { for (const f of files.flat().filter(Boolean)) { try { fs.unlinkSync(f); } catch (_) {} } }
+function cleanup(...files) { for (const f of files) { if (!f) continue; try { fs.unlinkSync(f); } catch (_) {} } }
 
-module.exports = { downloadInput, processAudio, analyze, waveform, spectrogram, cleanup, PRESETS, MAX_INPUT_BYTES };
+module.exports = { downloadInput, processAudio, analyze, waveform, spectrogram, cleanup, filterFor, mediaNode, contextInfoOf, unwrap };
