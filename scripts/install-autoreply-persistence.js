@@ -31,7 +31,7 @@ function patchHandler() {
   if (!src.includes('[AUTOREPLY PERSISTENT LOAD]')) {
     const anchor = '          arCfg = getArCfgCached();';
     if (!src.includes(anchor)) throw new Error('[autoreply-persist] chargement arCfg introuvable');
-    src = src.replace(anchor, `${anchor}\n\n          // [AUTOREPLY PERSISTENT LOAD]\n          // Si le fichier local a disparu après un redeploy Render, restaurer\n          // automatiquement la configuration + le média depuis MongoDB GridFS.\n          const _arSid = sessionContext.getCurrentSessionId();\n          const _localMissing = !!(arCfg?.active && arCfg?.localPath && !fs.existsSync(arCfg.localPath));\n          if (!arCfg?.active || _localMissing) {\n            try {\n              const persisted = await autoreplyStore.load(_arSid);\n              if (persisted?.active && Buffer.isBuffer(persisted.buffer)) {\n                arCfg = { ...persisted, _persistentBuffer: persisted.buffer, localPath: null };\n                console.log('[autoReply] ✅ note vidéo restaurée depuis MongoDB — session:', _arSid);\n              }\n            } catch (persistErr) {\n              console.warn('[autoReply] stockage persistant indisponible:', persistErr.message);\n            }\n          }`);
+    src = src.replace(anchor, `${anchor}\n\n          // [AUTOREPLY PERSISTENT LOAD]\n          // Si le fichier local a disparu après un redeploy Render, restaurer\n          // automatiquement la configuration + le média depuis MongoDB GridFS.\n          const _arSid = sessionContext.getCurrentSessionId();\n          const _expectedLocal = arCfg?.localPath || path.join(process.cwd(), 'database', 'sessions', _arSid, 'autoreply_video.mp4');\n          const _localMissing = !!(arCfg?.active && !fs.existsSync(_expectedLocal));\n          if (!arCfg?.active || _localMissing) {\n            try {\n              const persisted = await autoreplyStore.load(_arSid);\n              if (persisted?.active && Buffer.isBuffer(persisted.buffer)) {\n                arCfg = { ...persisted, _persistentBuffer: persisted.buffer, localPath: null };\n                console.log('[autoReply] ✅ note vidéo restaurée depuis MongoDB — session:', _arSid);\n              }\n            } catch (persistErr) {\n              console.warn('[autoReply] stockage persistant indisponible:', persistErr.message);\n            }\n          }`);
   }
 
   if (!src.includes('[AUTOREPLY PERSISTENT MEDIA BUFFER]')) {
@@ -39,14 +39,8 @@ function patchHandler() {
     if (!src.includes(existsLog)) throw new Error('[autoreply-persist] log fichier autoreply introuvable');
     src = src.replace(existsLog, `            const _persistentMediaBuf = Buffer.isBuffer(arCfg?._persistentBuffer) ? arCfg._persistentBuffer : null;\n            const _mediaAvailable = !!_persistentMediaBuf || fs.existsSync(mediaFilePath);\n            console.log(\`[autoReply] 📁 Média disponible: \${_mediaAvailable} | source: \${_persistentMediaBuf ? 'MongoDB' : 'disque'}\`); // [AUTOREPLY PERSISTENT MEDIA BUFFER]`);
 
-    src = src.replace(
-      '            if (!fs.existsSync(mediaFilePath)) {',
-      '            if (!_mediaAvailable) {'
-    );
-    src = src.replace(
-      '                const mediaBuf  = await fs.promises.readFile(mediaFilePath);',
-      '                const mediaBuf  = _persistentMediaBuf || await fs.promises.readFile(mediaFilePath);'
-    );
+    src = src.replace('            if (!fs.existsSync(mediaFilePath)) {', '            if (!_mediaAvailable) {');
+    src = src.replace('                const mediaBuf  = await fs.promises.readFile(mediaFilePath);', '                const mediaBuf  = _persistentMediaBuf || await fs.promises.readFile(mediaFilePath);');
   }
 
   fs.writeFileSync(HANDLER, src, 'utf8');
@@ -69,16 +63,12 @@ function patchReply() {
 
   if (!src.includes('[AUTOREPLY PERSISTENT OFF]')) {
     const anchor = "        database.updateGroupSettings(chatId, { autoReply: { active: false } });";
-    if (src.includes(anchor)) {
-      src = src.replace(anchor, `${anchor}\n        try { await autoreplyStore.setActive(sessionContext.getCurrentSessionId(), false); } catch (_) {} // [AUTOREPLY PERSISTENT OFF]`);
-    }
+    if (src.includes(anchor)) src = src.replace(anchor, `${anchor}\n        try { await autoreplyStore.setActive(sessionContext.getCurrentSessionId(), false); } catch (_) {} // [AUTOREPLY PERSISTENT OFF]`);
   }
 
   if (!src.includes('[AUTOREPLY PERSISTENT RESET]')) {
     const resetAnchor = "        [VIDEO_META_PATH(), VIDEO_FILE_PATH(), AUDIO_FILE_PATH(), IMAGE_FILE_PATH()].forEach(f => {";
-    if (src.includes(resetAnchor)) {
-      src = src.replace(resetAnchor, `        try { await autoreplyStore.remove(sessionContext.getCurrentSessionId()); } catch (_) {} // [AUTOREPLY PERSISTENT RESET]\n${resetAnchor}`);
-    }
+    if (src.includes(resetAnchor)) src = src.replace(resetAnchor, `        try { await autoreplyStore.remove(sessionContext.getCurrentSessionId()); } catch (_) {} // [AUTOREPLY PERSISTENT RESET]\n${resetAnchor}`);
   }
 
   fs.writeFileSync(REPLY, src, 'utf8');
