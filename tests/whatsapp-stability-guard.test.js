@@ -1,5 +1,13 @@
 'use strict';
 
+// Réduire les délais uniquement dans ce process de test avant le require.
+process.env.WA_STABILITY_MIN_GAP_MS = '1';
+process.env.WA_STABILITY_CHAT_GAP_MS = '1';
+process.env.WA_STABILITY_MEDIA_GAP_MS = '3';
+process.env.WA_STABILITY_GROUP_GAP_MS = '3';
+process.env.WA_STABILITY_GROUP_CHUNK = '2';
+process.env.WA_STABILITY_RESTORE_GAP_MS = '2';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
@@ -9,6 +17,8 @@ const {
   isTerminalSessionError,
   reconnectDelay,
   markSocketClosed,
+  chunkParticipants,
+  waitRestoreSlot,
 } = require('../utils/whatsappStabilityGuard');
 const pairingGate = require('../utils/pairingGate');
 
@@ -61,10 +71,44 @@ test('pairingGate sérialise le même numéro', async () => {
   const release1 = await pairingGate.acquire('+229 01 23 45 67 89');
   let acquired2 = false;
   const p2 = pairingGate.acquire('2290123456789').then(release => { acquired2 = true; release(); });
-  await new Promise(r => setTimeout(r, 80));
+  await new Promise(r => setTimeout(r, 20));
   assert.equal(acquired2, false);
   release1();
   await p2;
   assert.equal(acquired2, true);
   assert.equal(pairingGate.stats().active, 0);
+});
+
+test('actions de groupe en masse sont découpées et sérialisées', async () => {
+  const batches = [];
+  const requestBatches = [];
+  const sock = {
+    async sendMessage() { return { ok: true }; },
+    async relayMessage() { return { ok: true }; },
+    async groupParticipantsUpdate(group, participants, action) {
+      batches.push({ group, participants: [...participants], action });
+      return participants.map(jid => ({ jid, status: '200' }));
+    },
+    async groupRequestParticipantsUpdate(group, participants, action) {
+      requestBatches.push({ group, participants: [...participants], action });
+      return participants.map(jid => ({ jid, status: '200' }));
+    },
+  };
+  installSendGuard(sock, 'session_groups');
+  const users = ['1@s.whatsapp.net','2@s.whatsapp.net','3@s.whatsapp.net','4@s.whatsapp.net','5@s.whatsapp.net'];
+  const result = await sock.groupParticipantsUpdate('g@g.us', users, 'remove');
+  assert.equal(batches.length, 3);
+  assert.deepEqual(batches.map(x => x.participants.length), [2,2,1]);
+  assert.equal(result.length, 5);
+  await sock.groupRequestParticipantsUpdate('g@g.us', users, 'approve');
+  assert.equal(requestBatches.length, 3);
+  const stats = getStats(sock);
+  assert.equal(stats.groupActions, 10);
+  assert.equal(stats.requestActions, 5);
+  assert.equal(stats.groupFailed, 0);
+});
+
+test('helper de lots et restauration progressive restent bornés', async () => {
+  assert.deepEqual(chunkParticipants([1,2,3,4,5], 2), [[1,2],[3,4],[5]]);
+  await Promise.all([waitRestoreSlot(), waitRestoreSlot(), waitRestoreSlot()]);
 });
