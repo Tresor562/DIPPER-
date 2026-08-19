@@ -207,10 +207,10 @@ function enqueueGroupOperation(state, groupJid, participants, action, fn, kind =
     return allResults;
   };
   const run = previous.then(task, task);
-  state.groupTailByJid.set(key, run.catch(() => {}));
-  run.finally(() => {
-    const current = state.groupTailByJid.get(key);
-    if (current === run || current === run.catch?.(() => {})) state.groupTailByJid.delete(key);
+  const barrier = run.catch(() => {});
+  state.groupTailByJid.set(key, barrier);
+  barrier.finally(() => {
+    if (state.groupTailByJid.get(key) === barrier) state.groupTailByJid.delete(key);
   }).catch(() => {});
   return run;
 }
