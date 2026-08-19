@@ -30,14 +30,10 @@ if (!src.includes('whatsappStabilityGuard.installSendGuard(sock, sessionId)')) {
 
 if (!src.includes('whatsappStabilityGuard.reconnectDelay(reconnectAttempts, statusCode)')) {
   const old = '        const delay = Math.min(2000 * Math.pow(1.3, reconnectAttempts), 15000);';
-  if (src.includes(old)) {
-    src = src.replace(old, '        const delay = whatsappStabilityGuard.reconnectDelay(reconnectAttempts, statusCode); // ' + MARK);
-  } else if (!/const delay = whatsappStabilityGuard\.reconnectDelay\(/.test(src)) {
-    throw new Error('[wa-stability] formule reconnexion introuvable');
-  }
+  if (src.includes(old)) src = src.replace(old, '        const delay = whatsappStabilityGuard.reconnectDelay(reconnectAttempts, statusCode); // ' + MARK);
+  else if (!/const delay = whatsappStabilityGuard\.reconnectDelay\(/.test(src)) throw new Error('[wa-stability] formule reconnexion introuvable');
 }
 
-// Heartbeat modéré, idempotent. On évite de remplacer tous les setInterval du fichier.
 if (!src.includes('[WHATSAPP STABILITY HEARTBEAT]')) {
   const hb = "      }, 30000);\n\n      // ── Message de bienvenue";
   const hb55 = "      }, 55000); // [WHATSAPP STABILITY GUARD]\n\n      // ── Message de bienvenue";
@@ -58,7 +54,16 @@ if (!src.includes('whatsappStabilityGuard.markSocketClosed(session.sock)')) {
   src = src.replace(anchor, `  try { whatsappStabilityGuard.markSocketClosed(session.sock); } catch {} // ${MARK}\n${anchor}`);
 }
 
+// Restaurer les sessions progressivement après un déploiement sans conserver
+// le délai fixe de 1,5 s par compte. Le garde ajoute un petit jitter centralisé
+// afin d'éviter un stampede tout en accélérant fortement les gros déploiements.
+if (!src.includes('whatsappStabilityGuard.waitRestoreSlot()')) {
+  const old = '        await new Promise(r => setTimeout(r, 1500)); // évite la surcharge au démarrage';
+  if (src.includes(old)) src = src.replace(old, '        await whatsappStabilityGuard.waitRestoreSlot(); // [WHATSAPP STABILITY RESTORE]');
+  else if (!/waitRestoreSlot\(\)/.test(src)) console.warn('[wa-stability] délai restauration déjà restructuré, aucune modification');
+}
+
 fs.writeFileSync(SESSION, src, 'utf8');
 check(SESSION);
 check(path.join(ROOT, 'utils', 'whatsappStabilityGuard.js'));
-console.log('[wa-stability] ✅ garde stabilité installé: send+relay queue, burst soft-limit, retry transitoire, circuit breaker, backoff+jitter, heartbeat modéré');
+console.log('[wa-stability] ✅ garde stabilité installé: send+relay+group queue, médias espacés, batch groupes, retry transitoire, circuit breaker, backoff+jitter, restauration progressive');
