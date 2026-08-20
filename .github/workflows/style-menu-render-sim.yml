@@ -1,8 +1,6 @@
 name: Style Menu Render Simulation
 
 on:
-  push:
-    branches: [automation/style-menu-v2]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -10,19 +8,12 @@ on:
 permissions:
   contents: read
 
-jobs:
-  diagnostic:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Runner alive
-        run: |
-          echo "runner-started"
-          uname -a
-          echo "ok"
+concurrency:
+  group: style-menu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
   render-sim:
-    needs: diagnostic
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
