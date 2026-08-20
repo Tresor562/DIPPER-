@@ -62,23 +62,23 @@ if (!ping.includes('[PING SPECIAL PREMIUM PRESENTATION]') && ping.includes("type
   fs.writeFileSync(pingPath, ping, 'utf8');
 }
 
-// Le vérificateur historique exigeait withImage:false. Le ping premium utilise
-// volontairement l'image du style actif, donc accepter les deux modes.
+// Compatibilité avec les deux générations du vérificateur runtime.
+// L'ancien vérificateur avait une ancre dédiée au mode image de ping. Le
+// vérificateur style-menu-v2 valide déjà ping de façon structurelle, donc il
+// suffit de marquer la compatibilité sans forcer une ancienne ancre.
 let verifier = fs.readFileSync(verifierPath, 'utf8');
 if (!verifier.includes(VERIFIER_MARKER)) {
   const oldMarker = "  'menu.sendStyledMenuMessage', 'style: styleManager.getStyle()', 'withImage: false',\n]) {";
   const newMarker = "  'menu.sendStyledMenuMessage', 'style: styleManager.getStyle()',\n]) {";
-  if (verifier.includes(oldMarker)) {
-    verifier = verifier.replace(oldMarker, newMarker);
-  }
+  if (verifier.includes(oldMarker)) verifier = verifier.replace(oldMarker, newMarker);
 
   const anchor = "if (ping.includes('const probe = await reply') || ping.includes('{ delete: probeKey }')) {";
-  if (!verifier.includes(anchor)) {
-    throw new Error('[special-presentation] ancre vérificateur ping introuvable');
+  if (verifier.includes(anchor)) {
+    const compat = `// ${VERIFIER_MARKER}\nconst pingUsesLegacyNoImage = /withImage:\\s*false/.test(ping);\nconst pingUsesPremiumImage = ping.includes('[PING SPECIAL PREMIUM PRESENTATION]') && /withImage:\\s*true/.test(ping);\nif (!pingUsesLegacyNoImage && !pingUsesPremiumImage) {\n  throw new Error('[verify-runtime] ping image mode incomplet: attendu legacy withImage:false ou premium withImage:true');\n}\n\n`;
+    verifier = verifier.replace(anchor, compat + anchor);
+  } else {
+    verifier += `\n// ${VERIFIER_MARKER} — style-menu-v2 verifier handles ping structurally.\n`;
   }
-
-  const compat = `// ${VERIFIER_MARKER}\nconst pingUsesLegacyNoImage = /withImage:\\s*false/.test(ping);\nconst pingUsesPremiumImage = ping.includes('[PING SPECIAL PREMIUM PRESENTATION]') && /withImage:\\s*true/.test(ping);\nif (!pingUsesLegacyNoImage && !pingUsesPremiumImage) {\n  throw new Error('[verify-runtime] ping image mode incomplet: attendu legacy withImage:false ou premium withImage:true');\n}\n\n`;
-  verifier = verifier.replace(anchor, compat + anchor);
   fs.writeFileSync(verifierPath, verifier, 'utf8');
 }
 

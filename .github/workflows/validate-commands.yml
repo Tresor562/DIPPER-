@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: validate-commands-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   exaucee:
     name: Exaucee runtime
@@ -19,6 +23,8 @@ jobs:
           node-version: '20'
       - name: Install production dependencies
         run: npm install --omit=dev
+      - name: Install Exaucee response isolation
+        run: node scripts/install-exaucee-runtime-fix.js
       - name: Run Exaucee tests
         run: node --test tests/exaucee-core.test.js tests/exaucee-runtime.test.js tests/exaucee-dynamic.test.js tests/exaucee-bootstrap.test.js
       - name: Install Exaucee hooks
@@ -70,8 +76,8 @@ jobs:
       - name: Install response discipline in final handler
         run: node scripts/install-response-style.js
       - name: Test direct category menu phrases
-        run: node --test tests/category-menu.test.js
-      - name: Test all 21 disciplined response styles
+        run: node --test --test-force-exit tests/category-menu.test.js
+      - name: Test all disciplined response styles
         run: node --test tests/response-style.test.js
       - name: Validate all commands
         if: always()

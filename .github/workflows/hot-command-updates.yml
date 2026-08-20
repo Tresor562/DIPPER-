@@ -24,6 +24,25 @@ on:
       - '.github/workflows/hot-command-updates.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'commands/**/*.js'
+      - 'utils/hotCommandUpdater.js'
+      - 'utils/hotOidcAuth.js'
+      - 'utils/hotReleaseCrypto.js'
+      - 'utils/hotReleasePoller.js'
+      - 'scripts/install-hot-command-updater.js'
+      - 'scripts/install-hot-oidc-auth.js'
+      - 'scripts/validate-hot-command.js'
+      - 'scripts/publish-hot-commands.js'
+      - 'scripts/publish-hot-commands-oidc.js'
+      - 'scripts/build-encrypted-hot-release.js'
+      - 'tests/hot-command-updater.test.js'
+      - 'tests/hot-oidc-auth.test.js'
+      - 'tests/hot-installer.test.js'
+      - 'tests/hot-release-crypto.test.js'
+      - 'tests/hot-release-poller.test.js'
+      - 'package.json'
+      - '.github/workflows/hot-command-updates.yml'
   workflow_dispatch:
 
 permissions:
@@ -32,7 +51,7 @@ permissions:
 
 concurrency:
   group: hot-command-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate:

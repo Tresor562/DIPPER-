@@ -82,9 +82,6 @@ for (const file of files) {
   for (const command of (Array.isArray(exported) ? exported : [exported])) {
     if (!command || typeof command !== 'object' || !command.name || typeof command.execute !== 'function') continue;
 
-    // IMPORTANT : on inspecte uniquement la vraie fonction execute().
-    // Des helpers légitimes peuvent ignorer les messages fromMe (ex. cache
-    // antidelete) sans empêcher la commande elle-même de répondre à l'owner.
     if (executeBlocksFromMe(command.execute)) {
       ownerSelfBlockers.push(`${rel}#${command.name}`);
     }
@@ -108,7 +105,19 @@ if (ownerSelfBlockers.length) {
 }
 
 const canonical = new Set(commands.map(c => c.name.toLowerCase()));
-if (canonical.size !== commands.length) throw new Error('[owner-command-audit] noms canoniques dupliqués');
+if (canonical.size !== commands.length) {
+  const byName = new Map();
+  for (const command of commands) {
+    const key = command.name.toLowerCase();
+    const list = byName.get(key) || [];
+    list.push(command.file);
+    byName.set(key, list);
+  }
+  const duplicates = [...byName.entries()]
+    .filter(([, list]) => list.length > 1)
+    .map(([name, list]) => `${name}: ${list.join(', ')}`);
+  throw new Error('[owner-command-audit] noms canoniques dupliqués:\n' + duplicates.join('\n'));
+}
 
 const aliasCount = commands.reduce((sum, command) => sum + command.aliases.length, 0);
 const report = {
@@ -135,7 +144,4 @@ console.log('[owner-command-audit] ✅ owner connecté reconnu sur bot principal
 console.log('[owner-command-audit] ✅ aucune fonction execute() ne bloque explicitement fromMe');
 console.log('[owner-command-audit] ✅ watchdog anti-silence actif pour chaque dispatch classique');
 
-// Certains modules ouvrent des timers lors de require(). Les vérifications sont
-// toutes terminées à ce stade : sortir explicitement empêche ces timers de garder
-// le processus d'audit vivant jusqu'au timeout du build Render.
 process.exit(0);

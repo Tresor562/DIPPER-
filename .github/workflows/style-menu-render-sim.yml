@@ -1,0 +1,70 @@
+name: Style Menu Render Simulation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: style-menu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-sim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      PORT: "10000"
+      PUBLIC_MODE: "true"
+      RENDER: "true"
+      NODE_ENV: "production"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Clean Render-like install
+        run: npm install --no-audit --no-fund
+      - name: Prestart installers
+        run: npm run prestart
+      - name: Idempotence second prestart
+        run: npm run prestart
+      - name: 100000 style/menu simulations
+        run: npm run test:style-menu
+      - name: Render static simulator
+        run: npm run render:simulate
+      - name: Command validation
+        run: npm run validate:commands
+      - name: Boot + healthcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm start > /tmp/dipper-boot.log 2>&1 &
+          PID=$!
+          ok=0
+          for i in $(seq 1 25); do
+            if curl --silent --fail http://127.0.0.1:${PORT}/health | grep -q '"status":"ok"'; then
+              ok=1
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              cat /tmp/dipper-boot.log
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            cat /tmp/dipper-boot.log
+            kill "$PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          echo "Render boot + /health OK"

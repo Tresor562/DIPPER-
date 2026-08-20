@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: exaucee-preflight-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   preflight:
     name: Exaucee full prestart
@@ -15,10 +19,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
       - name: Install production dependencies
-        run: npm install --omit=dev
+        run: npm install --omit=dev --no-audit --no-fund
 
       - name: Syntax-check high-risk files before patching
         run: |

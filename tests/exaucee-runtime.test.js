@@ -58,7 +58,7 @@ test('nom explicite Exaucée reprend malgré le takeover humain', () => {
   assert.equal(result.shouldRespond, true);
 });
 
-test('Exaucée en privé envoie sans quoted pour éviter les messages silencieux Baileys', async () => {
+test('Exaucée en privé envoie sans quoted et conserve son marqueur anti-style', async () => {
   const calls = [];
   const sock = {
     async sendMessage(...args) {
@@ -71,7 +71,7 @@ test('Exaucée en privé envoie sans quoted pour éviter les messages silencieux
   await sendExaucee(sock, exaucee, msg.key.remoteJid, msg, 'Bonjour 🌸');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].length, 2);
-  assert.deepEqual(calls[0][1], { text: 'Bonjour 🌸' });
+  assert.deepEqual(calls[0][1], { text: 'Bonjour 🌸\n\n> Exaucée', __exaucee: true });
 });
 
 test('Exaucée en groupe conserve quoted et retombe sans quoted si nécessaire', async () => {
@@ -89,6 +89,8 @@ test('Exaucée en groupe conserve quoted et retombe sans quoted si nécessaire',
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0][2], { quoted: msg });
   assert.equal(calls[1].length, 2);
+  assert.equal(calls[1][1].__exaucee, true);
+  assert.match(calls[1][1].text, /> Exaucée$/u);
 });
 
 test('scheduler persiste puis exécute une tâche due', async () => {

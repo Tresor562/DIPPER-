@@ -86,7 +86,8 @@ test('le compte connecté peut invoquer une commande dynamique explicite', async
 
   assert.equal(handled, true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0][1].text, 'Commande owner OK 🌸');
+  assert.equal(calls[0][1].text, 'Commande owner OK 🌸\n\n> Exaucée');
+  assert.equal(calls[0][1].__exaucee, true);
 
   exaucee.scheduler.stop();
   cleanupSession(sessionId);

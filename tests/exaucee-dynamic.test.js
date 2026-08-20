@@ -52,7 +52,8 @@ test('une commande dynamique préfixée est réellement exécutable en groupe', 
   assert.equal(handled, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], '123@g.us');
-  assert.equal(calls[0][1].text, 'Salut depuis Exaucée 🌸');
+  assert.equal(calls[0][1].text, 'Salut depuis Exaucée 🌸\n\n> Exaucée');
+  assert.equal(calls[0][1].__exaucee, true);
 });
 
 test('une commande dynamique liée à un groupe ne fuit pas vers un autre groupe', async () => {
