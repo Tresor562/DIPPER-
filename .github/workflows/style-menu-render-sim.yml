@@ -7,8 +7,22 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Runner alive
+        run: |
+          echo "runner-started"
+          uname -a
+          echo "ok"
+
   render-sim:
+    needs: diagnostic
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
