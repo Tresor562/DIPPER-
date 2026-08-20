@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('fs');const path=require('path');const{spawnSync}=require('child_process');
-const ROOT=path.join(__dirname,'..');const file=path.join(ROOT,'commands','general_tools','menu.js');const MARK='[STYLE MENU V2 32]';
+const ROOT=path.join(__dirname,'..');const file=path.join(ROOT,'commands','general_tools','menu.js');const handlerFile=path.join(ROOT,'handler.js');const MARK='[STYLE MENU V2 32]';
 if(!fs.existsSync(file))throw new Error('[style-menu-v2] menu.js absent');let src=fs.readFileSync(file,'utf8');
 function once(from,to,label){if(src.includes(to))return;if(!src.includes(from))throw new Error(`[style-menu-v2] ${label} introuvable`);src=src.replace(from,to);}
 if(!src.includes(MARK)){
@@ -17,12 +17,21 @@ if(!src.includes(MARK)){
   src=src.replace('  const botName   = customCfg.title || config.botName || \'𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑\';','  let botName   = customCfg.title || config.botName || \'𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑\';');
   const styleBlock="  const styleActif    = (customCfg.style !== undefined && customCfg.style !== null)\n    ? customCfg.style\n    : styleManager.getStyle();";
   if(src.includes(styleBlock)&&!src.includes('[THEME BOT NAME]'))src=src.replace(styleBlock,styleBlock+"\n  if (!customCfg.title) botName = getTheme(styleActif).botName; // [THEME BOT NAME]");
-  if(!src.includes('[STYLELIST HINT]')){
-    const needle='return disciplineMenuText(text);';
-    const idx=src.indexOf(needle);
-    if(idx>=0)src=src.slice(0,idx)+"text += `\\n\\n➜ \\`${prefix}stylelist\\`\\nAffiche tous les styles disponibles et explique comment les activer.`; // [STYLELIST HINT]\n  "+src.slice(idx);
+  if(!src.includes('[STYLELIST HINT]')){const needle='return disciplineMenuText(text);';const idx=src.indexOf(needle);if(idx>=0)src=src.slice(0,idx)+"text += `\\n\\n➜ \\`${prefix}stylelist\\`\\nAffiche tous les styles disponibles et explique comment les activer.`; // [STYLELIST HINT]\n  "+src.slice(idx);}
+}
+fs.writeFileSync(file,src,'utf8');
+
+if(fs.existsSync(handlerFile)){
+  let handler=fs.readFileSync(handlerFile,'utf8');
+  const from='const disciplinedPayload = decoratePayload(payload);';
+  const to="const activeStyleTrace = commandResponseStorage.getStore();\n    const disciplinedPayload = activeStyleTrace?.command === 'exaucee' ? payload : decoratePayload(payload); // [EXAUCEE STYLE BYPASS]";
+  if(!handler.includes('[EXAUCEE STYLE BYPASS]')){
+    if(!handler.includes(from))throw new Error('[style-menu-v2] point de bypass Exaucée introuvable');
+    handler=handler.replace(from,to);fs.writeFileSync(handlerFile,handler,'utf8');
   }
 }
-fs.writeFileSync(file,src,'utf8');const chk=spawnSync(process.execPath,['--check',file],{encoding:'utf8'});if(chk.status!==0)throw new Error('[style-menu-v2] syntaxe menu: '+(chk.stderr||chk.stdout));
+
+for(const target of[file,handlerFile]){if(!fs.existsSync(target))continue;const chk=spawnSync(process.execPath,['--check',target],{encoding:'utf8'});if(chk.status!==0)throw new Error('[style-menu-v2] syntaxe '+path.basename(target)+': '+(chk.stderr||chk.stdout));}
 const final=fs.readFileSync(file,'utf8');for(const token of[MARK,'style31','MAX_STYLE','[THEME HEADER 21-31]','[THEME BOT NAME]'])if(!final.includes(token))throw new Error('[style-menu-v2] garde-fou absent '+token);
-console.log('[style-menu-v2] ✅ menu étendu à 32 styles + nom thématique + fallback média');
+if(fs.existsSync(handlerFile)&&!fs.readFileSync(handlerFile,'utf8').includes('[EXAUCEE STYLE BYPASS]'))throw new Error('[style-menu-v2] bypass Exaucée absent');
+console.log('[style-menu-v2] ✅ 32 styles + nom thématique + fallback média + Exaucée intacte');
