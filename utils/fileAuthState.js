@@ -1,21 +1,24 @@
 /**
  * 𝐃𝐈𝐏𝐏𝐄𝐑 — Auth State fichiers + sauvegarde MongoDB durable.
  *
- * Le runtime Baileys continue d'utiliser useMultiFileAuthState (format natif),
- * mais chaque fichier d'auth est répliqué dans MongoDB. Au redémarrage sur
- * un disque vierge (Render redeploy / remplacement d'instance), le dossier
- * local est reconstruit AVANT de recréer le socket WhatsApp.
+ * Baileys travaille avec son format multi-fichiers natif, tandis que chaque
+ * fichier d'auth est répliqué dans MongoDB. Sur un nouveau disque Render,
+ * le dossier local est reconstruit avant de recréer le socket WhatsApp.
  */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { useMultiFileAuthState, BufferJSON, proto, initAuthCreds } = require('@whiskeysockets/baileys');
 const { getDb } = require('./mongoClient');
 
 const SESSIONS_ROOT = path.join(process.cwd(), 'sessions');
 const BACKUP_COLLECTION = 'wa_session_auth_files_v1';
 const backupTails = new Map();
+const LEGACY_KEY_TYPES = [
+  'app-state-sync-key', 'app-state-sync-version', 'sender-key-memory',
+  'sender-key', 'pre-key', 'session'
+].sort((a, b) => b.length - a.length);
 
 function getSessionDir(sessionId) {
   return path.join(SESSIONS_ROOT, sessionId);
@@ -65,7 +68,7 @@ async function backupSessionFilesNow(sessionId) {
     });
   }
   if (ops.length) await col.bulkWrite(ops, { ordered: false });
-  await col.deleteMany({ sessionId, path: { $nin: paths } });
+  await col.deleteMany({ sessionId, path: { $nin: paths.concat('__manifest__') } });
   await col.updateOne(
     { sessionId, path: '__manifest__' },
     { $set: { sessionId, path: '__manifest__', fileCount: files.length, updatedAt: now } },
@@ -96,41 +99,88 @@ async function hasRemoteSessionBackup(sessionId) {
   }
 }
 
+function parseLegacyKeyDocId(docId) {
+  const value = String(docId || '');
+  for (const type of LEGACY_KEY_TYPES) {
+    if (value.startsWith(`${type}-`)) return { type, id: value.slice(type.length + 1) };
+  }
+  return null;
+}
+
+async function restoreLegacyMongoAuth(sessionId) {
+  let db;
+  try { db = await getDb(); } catch (_) { return false; }
+  const collection = db.collection(`auth_${sessionId}`);
+  let docs;
+  try { docs = await collection.find({}).toArray(); } catch (_) { return false; }
+  const credsDoc = docs.find(doc => doc._id === 'creds' && doc.value);
+  if (!credsDoc) return false;
+
+  const dir = getSessionDir(sessionId);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const { state, saveCreds } = await useMultiFileAuthState(dir);
+  const creds = JSON.parse(credsDoc.value, BufferJSON.reviver) || initAuthCreds();
+  Object.keys(state.creds).forEach(key => delete state.creds[key]);
+  Object.assign(state.creds, creds);
+  await saveCreds();
+
+  const grouped = {};
+  for (const doc of docs) {
+    if (doc._id === 'creds' || !doc.value) continue;
+    const parsed = parseLegacyKeyDocId(doc._id);
+    if (!parsed) continue;
+    let value = JSON.parse(doc.value, BufferJSON.reviver);
+    if (parsed.type === 'app-state-sync-key' && value) value = proto.Message.AppStateSyncKeyData.fromObject(value);
+    grouped[parsed.type] = grouped[parsed.type] || {};
+    grouped[parsed.type][parsed.id] = value;
+  }
+  if (Object.keys(grouped).length) await state.keys.set(grouped);
+  const ok = sessionDirExists(sessionId);
+  if (ok) {
+    console.log(`[FileAuthState] ♻️ ${sessionId} récupérée depuis l'ancien stockage Mongo auth_*`);
+    await backupSessionFiles(sessionId).catch(() => false);
+  }
+  return ok;
+}
+
 async function restoreSessionFiles(sessionId, { force = false } = {}) {
   if (!force && sessionDirExists(sessionId)) return true;
-  let docs;
+  let docs = [];
   try {
     const col = await getBackupCollection();
     docs = await col.find({ sessionId, path: { $ne: '__manifest__' } }).toArray();
   } catch (err) {
     console.error(`[FileAuthState] restauration Mongo inaccessible (${sessionId}):`, err.message);
-    return false;
   }
-  if (!docs.length) return false;
-  const dir = getSessionDir(sessionId);
-  await fs.promises.mkdir(dir, { recursive: true });
-  for (const doc of docs) {
-    const rel = String(doc.path || '');
-    if (!rel || rel.includes('..') || path.isAbsolute(rel)) continue;
-    const abs = path.join(dir, ...rel.split('/'));
-    if (!abs.startsWith(dir + path.sep) && abs !== dir) continue;
-    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-    await fs.promises.writeFile(abs, Buffer.from(String(doc.data || ''), 'base64'));
+
+  if (docs.length) {
+    const dir = getSessionDir(sessionId);
+    await fs.promises.mkdir(dir, { recursive: true });
+    for (const doc of docs) {
+      const rel = String(doc.path || '');
+      if (!rel || rel.includes('..') || path.isAbsolute(rel)) continue;
+      const abs = path.join(dir, ...rel.split('/'));
+      if (!abs.startsWith(dir + path.sep) && abs !== dir) continue;
+      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+      await fs.promises.writeFile(abs, Buffer.from(String(doc.data || ''), 'base64'));
+    }
+    if (sessionDirExists(sessionId)) {
+      console.log(`[FileAuthState] ♻️ Session ${sessionId} restaurée depuis MongoDB (${docs.length} fichier(s))`);
+      return true;
+    }
   }
-  const ok = sessionDirExists(sessionId);
-  if (ok) console.log(`[FileAuthState] ♻️ Session ${sessionId} restaurée depuis MongoDB (${docs.length} fichier(s))`);
-  return ok;
+
+  // Compatibilité : tente l'ancien stockage auth_<sessionId>. Les anciennes
+  // collections n'étaient volontairement jamais supprimées lors de la migration.
+  return restoreLegacyMongoAuth(sessionId);
 }
 
 async function useFileAuthState(sessionId) {
-  // Restaure automatiquement si Render fournit un nouveau disque éphémère.
   if (!sessionDirExists(sessionId)) await restoreSessionFiles(sessionId);
-
   const dir = getSessionDir(sessionId);
   fs.mkdirSync(dir, { recursive: true });
   const { state, saveCreds: nativeSaveCreds } = await useMultiFileAuthState(dir);
 
-  // Réplique aussi toutes les mutations de Signal keys, pas uniquement creds.json.
   if (state?.keys?.set && !state.keys.__dipperPersistentWrapped) {
     const nativeSet = state.keys.set.bind(state.keys);
     state.keys.set = async (data) => {
@@ -146,12 +196,7 @@ async function useFileAuthState(sessionId) {
     await backupSessionFiles(sessionId).catch(() => false);
   };
 
-  // Une session déjà locale est immédiatement répliquée, même si aucun nouvel
-  // événement creds.update n'arrive avant le prochain déploiement.
-  if (sessionDirExists(sessionId)) {
-    await backupSessionFiles(sessionId).catch(() => false);
-  }
-
+  if (sessionDirExists(sessionId)) await backupSessionFiles(sessionId).catch(() => false);
   return { state, saveCreds };
 }
 
@@ -187,5 +232,6 @@ module.exports = {
   listLocalSessionIds,
   backupSessionFiles,
   restoreSessionFiles,
+  restoreLegacyMongoAuth,
   hasRemoteSessionBackup,
 };
