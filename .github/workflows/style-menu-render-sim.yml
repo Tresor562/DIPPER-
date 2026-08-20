@@ -3,6 +3,8 @@ name: Style Menu Render Simulation
 on:
   push:
     branches: [automation/style-menu-v2]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
