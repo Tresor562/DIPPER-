@@ -13,7 +13,7 @@ const {
 const FORBIDDEN = /[╭╮╰╯┃║╔╗╚╝╠╣╦╩╬┌┐└┘│≪≫╼╾]/u;
 const legacy = `╭━≪• 🔑 CODE DE CONNEXION •≫━╾╮\n┃\n┃  1234-5678\n┃\n╰━━━━━━━━━━━━━━━━━━━╯`;
 
-for (let style = 0; style <= 20; style++) {
+for (let style = 0; style <= 31; style++) {
   test(`style ${style} nettoie les cadres lourds`, () => {
     assert.ok(PROFILES[style], `profil ${style} absent`);
     const result = sanitizeLegacyText(legacy, style);
