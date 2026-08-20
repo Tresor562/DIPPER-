@@ -1,119 +1,191 @@
 /**
- * ╔══════════════════════════════════════════════════════════════╗
- * ║   𝐃𝐈𝐏𝐏𝐄𝐑 — Auth State Fichiers pour Baileys Multi-Sessions ║
- * ║   utils/fileAuthState.js                                     ║
- * ╚══════════════════════════════════════════════════════════════╝
+ * 𝐃𝐈𝐏𝐏𝐄𝐑 — Auth State fichiers + sauvegarde MongoDB durable.
  *
- * RÔLE :
- *   [Chantier "Architecture hybride"] Remplace utils/mongoAuth.js pour le
- *   stockage des credentials WhatsApp (creds.json, keys, app-state-sync-keys)
- *   du mode multi-session. Chaque session possède désormais son propre
- *   dossier local, comme demandé :
- *
- *     sessions/
- *     ├── session_22912345678/
- *     ├── session_33698765432/
- *     └── ...
- *
- * CHOIX TECHNIQUE — réutiliser useMultiFileAuthState natif de Baileys
- * (au lieu de réécrire un fournisseur maison comme mongoAuth.js avait dû
- * le faire pour Mongo) :
- *   - Déjà une dépendance du projet (@whiskeysockets/baileys), déjà
- *     utilisée en mode mono-session dans index.js — donc déjà prouvée
- *     compatible avec la version Baileys de ce projet.
- *   - Gère lui-même toute la sérialisation BufferJSON des clés (pre-keys,
- *     session keys, app-state-sync-keys) — c'est exactement la partie la
- *     plus délicate à reproduire correctement à la main (mongoAuth.js
- *     avait dû le faire pour Mongo ; ici, aucune réimplémentation).
- *   - Suit automatiquement les futures mises à jour de Baileys, plutôt que
- *     de maintenir un fournisseur parallèle qui pourrait diverger.
- *
- * CE FICHIER NE CONTIENT AUCUNE LOGIQUE MÉTIER DE PAIRING :
- *   Uniquement la gestion des dossiers/fichiers de credentials. La logique
- *   de session (connexion, reconnexion, etc.) reste dans sessionManager.js.
+ * Le runtime Baileys continue d'utiliser useMultiFileAuthState (format natif),
+ * mais chaque fichier d'auth est répliqué dans MongoDB. Au redémarrage sur
+ * un disque vierge (Render redeploy / remplacement d'instance), le dossier
+ * local est reconstruit AVANT de recréer le socket WhatsApp.
  */
-
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { getDb } = require('./mongoClient');
 
-// Racine de tous les dossiers de sessions multi-utilisateurs — distincte du
-// dossier SESSION_NAME (mono-session, inchangé) pour ne jamais mélanger les
-// deux modes.
 const SESSIONS_ROOT = path.join(process.cwd(), 'sessions');
+const BACKUP_COLLECTION = 'wa_session_auth_files_v1';
+const backupTails = new Map();
 
-/**
- * Retourne le chemin absolu du dossier local d'une session.
- * @param {string} sessionId ex: 'session_22912345678'
- * @returns {string}
- */
 function getSessionDir(sessionId) {
   return path.join(SESSIONS_ROOT, sessionId);
 }
 
-/**
- * Indique si un dossier de credentials existe déjà pour cette session
- * (donc si des creds sont potentiellement rechargeables).
- * @param {string} sessionId
- * @returns {boolean}
- */
 function sessionDirExists(sessionId) {
   const dir = getSessionDir(sessionId);
   return fs.existsSync(dir) && fs.existsSync(path.join(dir, 'creds.json'));
 }
 
-/**
- * Charge (ou crée) l'auth state fichiers d'une session — même contrat que
- * utils/mongoAuth.js::useMongoAuthState (state + saveCreds), pour rester un
- * remplacement direct côté sessionManager.js.
- * @param {string} sessionId
- * @returns {Promise<{ state: object, saveCreds: Function }>}
- */
-async function useFileAuthState(sessionId) {
-  const dir = getSessionDir(sessionId);
-  fs.mkdirSync(dir, { recursive: true });
-  const { state, saveCreds } = await useMultiFileAuthState(dir);
-  return { state, saveCreds };
+function walkFiles(root, dir = root, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkFiles(root, abs, out);
+    else if (entry.isFile()) out.push({ abs, rel: path.relative(root, abs).split(path.sep).join('/') });
+  }
+  return out;
 }
 
-/**
- * Supprime définitivement le dossier de credentials d'une session.
- * Appelé quand un utilisateur se déconnecte définitivement (miroir de
- * mongoAuth.js::deleteMongoSession).
- * @param {string} sessionId
- */
-async function deleteSessionFiles(sessionId) {
+async function getBackupCollection() {
+  const db = await getDb();
+  const col = db.collection(BACKUP_COLLECTION);
+  try { await col.createIndex({ sessionId: 1, path: 1 }, { unique: true }); } catch (_) {}
+  try { await col.createIndex({ updatedAt: 1 }); } catch (_) {}
+  return col;
+}
+
+async function backupSessionFilesNow(sessionId) {
   const dir = getSessionDir(sessionId);
+  if (!sessionDirExists(sessionId)) return false;
+  const files = walkFiles(dir);
+  if (!files.length) return false;
+  const col = await getBackupCollection();
+  const now = new Date();
+  const paths = [];
+  const ops = [];
+  for (const file of files) {
+    const data = await fs.promises.readFile(file.abs);
+    paths.push(file.rel);
+    ops.push({
+      updateOne: {
+        filter: { sessionId, path: file.rel },
+        update: { $set: { sessionId, path: file.rel, data: data.toString('base64'), size: data.length, updatedAt: now } },
+        upsert: true,
+      },
+    });
+  }
+  if (ops.length) await col.bulkWrite(ops, { ordered: false });
+  await col.deleteMany({ sessionId, path: { $nin: paths } });
+  await col.updateOne(
+    { sessionId, path: '__manifest__' },
+    { $set: { sessionId, path: '__manifest__', fileCount: files.length, updatedAt: now } },
+    { upsert: true }
+  );
+  return true;
+}
+
+function backupSessionFiles(sessionId) {
+  const previous = backupTails.get(sessionId) || Promise.resolve();
+  const run = previous.then(() => backupSessionFilesNow(sessionId), () => backupSessionFilesNow(sessionId));
+  const tail = run.catch(err => {
+    console.error(`[FileAuthState] sauvegarde Mongo échouée (${sessionId}):`, err.message);
+    return false;
+  });
+  backupTails.set(sessionId, tail);
+  tail.finally(() => { if (backupTails.get(sessionId) === tail) backupTails.delete(sessionId); }).catch(() => {});
+  return run;
+}
+
+async function hasRemoteSessionBackup(sessionId) {
   try {
-    await fs.promises.rm(dir, { recursive: true, force: true });
-    console.log(`[FileAuthState] Dossier supprimé : ${sessionId}`);
+    const col = await getBackupCollection();
+    return !!(await col.findOne({ sessionId, path: 'creds.json' }, { projection: { _id: 1 } }));
   } catch (err) {
-    console.error(`[FileAuthState] deleteSessionFiles error (${sessionId}):`, err.message);
+    console.error(`[FileAuthState] vérification backup Mongo échouée (${sessionId}):`, err.message);
+    return false;
   }
 }
 
-/**
- * Liste les sessionIds qui ont un dossier de credentials local valide
- * (contient au moins creds.json). Utilisé pour vérifier, au redémarrage,
- * que le dossier attendu par l'index Mongo existe bien avant de tenter une
- * reconnexion (voir Phase 2 — sessionManager.js).
- * @returns {string[]}
- */
+async function restoreSessionFiles(sessionId, { force = false } = {}) {
+  if (!force && sessionDirExists(sessionId)) return true;
+  let docs;
+  try {
+    const col = await getBackupCollection();
+    docs = await col.find({ sessionId, path: { $ne: '__manifest__' } }).toArray();
+  } catch (err) {
+    console.error(`[FileAuthState] restauration Mongo inaccessible (${sessionId}):`, err.message);
+    return false;
+  }
+  if (!docs.length) return false;
+  const dir = getSessionDir(sessionId);
+  await fs.promises.mkdir(dir, { recursive: true });
+  for (const doc of docs) {
+    const rel = String(doc.path || '');
+    if (!rel || rel.includes('..') || path.isAbsolute(rel)) continue;
+    const abs = path.join(dir, ...rel.split('/'));
+    if (!abs.startsWith(dir + path.sep) && abs !== dir) continue;
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, Buffer.from(String(doc.data || ''), 'base64'));
+  }
+  const ok = sessionDirExists(sessionId);
+  if (ok) console.log(`[FileAuthState] ♻️ Session ${sessionId} restaurée depuis MongoDB (${docs.length} fichier(s))`);
+  return ok;
+}
+
+async function useFileAuthState(sessionId) {
+  // Restaure automatiquement si Render fournit un nouveau disque éphémère.
+  if (!sessionDirExists(sessionId)) await restoreSessionFiles(sessionId);
+
+  const dir = getSessionDir(sessionId);
+  fs.mkdirSync(dir, { recursive: true });
+  const { state, saveCreds: nativeSaveCreds } = await useMultiFileAuthState(dir);
+
+  // Réplique aussi toutes les mutations de Signal keys, pas uniquement creds.json.
+  if (state?.keys?.set && !state.keys.__dipperPersistentWrapped) {
+    const nativeSet = state.keys.set.bind(state.keys);
+    state.keys.set = async (data) => {
+      const result = await nativeSet(data);
+      await backupSessionFiles(sessionId).catch(() => false);
+      return result;
+    };
+    Object.defineProperty(state.keys, '__dipperPersistentWrapped', { value: true, enumerable: false });
+  }
+
+  const saveCreds = async () => {
+    await nativeSaveCreds();
+    await backupSessionFiles(sessionId).catch(() => false);
+  };
+
+  // Une session déjà locale est immédiatement répliquée, même si aucun nouvel
+  // événement creds.update n'arrive avant le prochain déploiement.
+  if (sessionDirExists(sessionId)) {
+    await backupSessionFiles(sessionId).catch(() => false);
+  }
+
+  return { state, saveCreds };
+}
+
+async function deleteSessionFiles(sessionId) {
+  const dir = getSessionDir(sessionId);
+  try { await fs.promises.rm(dir, { recursive: true, force: true }); } catch (err) {
+    console.error(`[FileAuthState] suppression locale échouée (${sessionId}):`, err.message);
+  }
+  try {
+    const col = await getBackupCollection();
+    await col.deleteMany({ sessionId });
+    console.log(`[FileAuthState] Session supprimée localement + MongoDB : ${sessionId}`);
+  } catch (err) {
+    console.error(`[FileAuthState] suppression backup Mongo échouée (${sessionId}):`, err.message);
+  }
+}
+
 function listLocalSessionIds() {
   if (!fs.existsSync(SESSIONS_ROOT)) return [];
   return fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((sessionId) => sessionDirExists(sessionId));
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .filter(sessionId => sessionDirExists(sessionId));
 }
 
 module.exports = {
   SESSIONS_ROOT,
+  BACKUP_COLLECTION,
   getSessionDir,
   sessionDirExists,
   useFileAuthState,
   deleteSessionFiles,
   listLocalSessionIds,
+  backupSessionFiles,
+  restoreSessionFiles,
+  hasRemoteSessionBackup,
 };
