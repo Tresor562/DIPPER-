@@ -13,7 +13,7 @@
     "start:multi": "node --expose-gc index.js",
     "start:railway": "node --expose-gc index.js",
     "test": "node --test tests/",
-    "test:style-menu": "node --test tests/style-menu-v2.test.js",
+    "test:style-menu": "node --test tests/style-menu-v2.test.js tests/style-menu-fuzz.test.js",
     "render:simulate": "node scripts/render-build-sim.js",
     "test:hot-updater": "node --test tests/hot-command-updater.test.js tests/hot-oidc-auth.test.js tests/hot-installer.test.js tests/hot-release-crypto.test.js tests/hot-release-poller.test.js",
     "validate:commands": "node scripts/validate-commands.js",
