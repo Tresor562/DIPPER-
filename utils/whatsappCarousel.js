@@ -11,12 +11,15 @@ function quickButton(text,id){return {name:'quick_reply',buttonParamsJson:JSON.s
 async function makeCard(sock,card){
   let imageMessage;
   if(card.imageBuffer){try{const media=await prepareWAMessageMedia({image:card.imageBuffer},{upload:sock.waUploadToServer});imageMessage=media.imageMessage;}catch(_){}}
-  return proto.Message.InteractiveMessage.CarouselMessage.Card.fromObject({
+  // Baileys 6.7.x n'expose pas CarouselMessage.Card.fromObject(). Les cartes
+  // restent des objets protobuf simples et sont normalisées par
+  // InteractiveMessage.fromObject() au niveau du message parent.
+  return {
     header:proto.Message.InteractiveMessage.Header.fromObject({title:card.title||'',hasMediaAttachment:!!imageMessage,imageMessage}),
     body:proto.Message.InteractiveMessage.Body.fromObject({text:card.body||''}),
     footer:proto.Message.InteractiveMessage.Footer.fromObject({text:card.footer||''}),
     nativeFlowMessage:proto.Message.InteractiveMessage.NativeFlowMessage.fromObject({buttons:card.buttons||[]}),
-  });
+  };
 }
 
 async function sendCarousel({sock,jid,quoted,cards,body='Glisse vers la gauche pour explorer.',footer='THE BIG DIPPER',contextInfo={},fallbackText=''}){
