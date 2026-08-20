@@ -12,7 +12,7 @@ function activeStyle(style){
 }
 function getProfile(style){return getTheme(activeStyle(style));}
 function separatorFor(style){return getProfile(style).separator||THEMES[0].separator;}
-function normalizeLine(line){return String(line??'').replace(/[\u2500-\u257f]/g,' ').replace(/[ \t]{2,}/g,' ').trimEnd();}
+function normalizeLine(line){return String(line??'').replace(/[\u2500-\u257f≪≫╼╾]/g,' ').replace(/[ \t]{2,}/g,' ').trimEnd();}
 function sanitizeLegacyText(text,style){
   if(typeof text!=='string'||!text)return text;
   const sep=separatorFor(style); const out=[]; let lastBlank=false;
