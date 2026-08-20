@@ -76,7 +76,7 @@ jobs:
       - name: Install response discipline in final handler
         run: node scripts/install-response-style.js
       - name: Test direct category menu phrases
-        run: node --test tests/category-menu.test.js
+        run: node --test --test-force-exit tests/category-menu.test.js
       - name: Test all disciplined response styles
         run: node --test tests/response-style.test.js
       - name: Validate all commands
