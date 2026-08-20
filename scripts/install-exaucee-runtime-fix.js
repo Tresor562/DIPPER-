@@ -27,12 +27,18 @@ if (!runtime.includes(RUNTIME_MARKER)) {
 
 let style = fs.readFileSync(responseStylePath, 'utf8');
 if (!style.includes(STYLE_MARKER)) {
-  const anchor = `function decoratePayload(payload, style) {\n  if (!payload || typeof payload !== 'object') return payload;`;
-  const replacement = `function decoratePayload(payload, style) {\n  if (!payload || typeof payload !== 'object') return payload;\n\n  // ${STYLE_MARKER}\n  // Les réponses d'Exaucée ont leur propre signature et ne doivent pas recevoir\n  // le footer global THE BIG DIPPER. Le marqueur interne est retiré avant Baileys.\n  if (payload.__exaucee === true) {\n    const exauceePayload = { ...payload };\n    delete exauceePayload.__exaucee;\n    return exauceePayload;\n  }`;
-  if (!style.includes(anchor)) {
+  const compactAnchor = `function decoratePayload(payload,style){if(!payload||typeof payload!=='object'||payload.react||payload.delete)return payload;`;
+  const compactReplacement = `function decoratePayload(payload,style){if(!payload||typeof payload!=='object'||payload.react||payload.delete)return payload;/* ${STYLE_MARKER} */if(payload.__exaucee===true){const exauceePayload={...payload};delete exauceePayload.__exaucee;return exauceePayload;}`;
+  const legacyAnchor = `function decoratePayload(payload, style) {\n  if (!payload || typeof payload !== 'object') return payload;`;
+  const legacyReplacement = `function decoratePayload(payload, style) {\n  if (!payload || typeof payload !== 'object') return payload;\n\n  // ${STYLE_MARKER}\n  // Les réponses d'Exaucée ont leur propre signature et ne doivent pas recevoir\n  // le footer global THE BIG DIPPER. Le marqueur interne est retiré avant Baileys.\n  if (payload.__exaucee === true) {\n    const exauceePayload = { ...payload };\n    delete exauceePayload.__exaucee;\n    return exauceePayload;\n  }`;
+
+  if (style.includes(compactAnchor)) {
+    style = style.replace(compactAnchor, compactReplacement);
+  } else if (style.includes(legacyAnchor)) {
+    style = style.replace(legacyAnchor, legacyReplacement);
+  } else {
     throw new Error('[exaucee-runtime-fix] ancre decoratePayload introuvable');
   }
-  style = style.replace(anchor, replacement);
   fs.writeFileSync(responseStylePath, style, 'utf8');
 }
 
