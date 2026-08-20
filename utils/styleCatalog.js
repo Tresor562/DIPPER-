@@ -8,7 +8,7 @@ const THEMES = {
   2:{name:'Naruto',botName:'🍃 DIPPER × NARUTO',mark:'🍃',accent:'🌀',separator:'🍃 ───── 🌀',signature:'🍃 Dattebayo',tagline:'la volonté du feu',wait:'Jutsu en cours...',success:'Mission accomplie !',error:'Argument manquant, dattebayo !',denied:'Jutsu réservé.'},
   3:{name:'Cid Kagenou / Shadow',botName:'◈ DIPPER // SHADOW',mark:'◈',accent:'🕶️',separator:'◈ ─────── ◈',signature:'◈ The Shadow',tagline:'I am atomic',wait:"L'ombre agit...",success:'Mission exécutée.',error:'Demande incomplète.',denied:'Accès réservé.'},
   4:{name:'Hacker',botName:'[ DIPPER://ROOT ]',mark:'>',accent:'💻',separator:'[========]',signature:'[ DIPPER ]',tagline:'access granted',wait:'[ PROCESSING ]',success:'[ OK ]',error:'[ ERROR ]',denied:'[ DENIED ]'},
-  5:{name:'Manhwa',botName:'⚔️ DIPPER // LEVEL UP',mark:'⚔️',accent:'⬆️',separator:'⚔️ ───── ⬆️',signature:'⚔️ LEVEL UP',tagline:'rise through every level',wait:'Activation du skill...',success:'Skill terminé.',error:'Paramètre requis.',denied:'Rang insuffisant.'},
+  5:{name:'Manhwa',botName:'⚔️ DIPPER // LEVEL UP',mark:'⚔️',accent:'⬆️',separator:'⚔️ ───── ⬆️',signature:'⚔️ LEVEL UP',tagline:'rise through every level',wait:'Activation du skill...',success:'Skill terminé.',error:'Paramètre requis.',denied:'Rang insuffisante.'},
   6:{name:'Ai Oshino',botName:'⭐ DIPPER × AI',mark:'⭐',accent:'✨',separator:'⭐ ───── ✨',signature:'⭐ DIPPER × Ai',tagline:'true idol',wait:'Préparation en cours...',success:"C'est prêt !",error:'Information manquante.',denied:'Accès réservé.'},
   7:{name:'Ruby Oshino',botName:'🌸 DIPPER × RUBY',mark:'🌸',accent:'💗',separator:'🌸 ───── 💗',signature:'🌸 DIPPER × Ruby',tagline:'shine brighter',wait:'Un instant...',success:"C'est terminé !",error:'Il manque une information.',denied:'Accès réservé.'},
   8:{name:'Satoru Gojo',botName:'♾️ DIPPER × GOJO',mark:'♾️',accent:'👁️',separator:'♾️ ───── 👁️',signature:'♾️ Infinity',tagline:'limitless interface',wait:'Infinity activé...',success:'Terminé. Trop facile.',error:'Argument manquant.',denied:'Accès réservé.'},
@@ -38,7 +38,12 @@ const THEMES = {
 };
 
 const IMAGE_PAGES = {
-  21:[],22:[],23:[],24:[],25:[],26:[],
+  21:['https://ibb.co/2YNc3Yry','https://ibb.co/Jwn3nnZR','https://ibb.co/fwwTZBj','https://ibb.co/Fb5SbwcB','https://ibb.co/Q3mFcV7z'],
+  22:['https://ibb.co/fd5DPdvH','https://ibb.co/11NHy34','https://ibb.co/LzqL5Nys','https://ibb.co/7xs4qhXd','https://ibb.co/YTJYhGM0','https://ibb.co/FkWMDVJv'],
+  23:['https://ibb.co/V0WNDzCg','https://ibb.co/hxWkf2fx','https://ibb.co/hJLFNv6n','https://ibb.co/9HF5z9wX','https://ibb.co/Vc53DCy1','https://ibb.co/JDrYXH5'],
+  24:['https://ibb.co/f7tSjD5','https://ibb.co/LWgcwkn','https://ibb.co/CR3qBbS','https://ibb.co/9LDSKFJ','https://ibb.co/xtjTYzRn','https://ibb.co/M5kTP29p'],
+  25:['https://ibb.co/qGHDyT7','https://ibb.co/5XDCzj48','https://ibb.co/wFXBXRTB','https://ibb.co/gFJZBnLH','https://ibb.co/v64Twhkf','https://ibb.co/SwwjbJjY'],
+  26:['https://ibb.co/BH4JJ2Bq','https://ibb.co/Rk4LBTVH','https://ibb.co/1Y2wjdb7','https://ibb.co/ccGNftBx','https://ibb.co/DHTRhTpB','https://ibb.co/V0xpt9PP'],
   27:['https://ibb.co/FqhvgPTY','https://ibb.co/9H1rTg3Z','https://ibb.co/xqBcmgVL','https://ibb.co/5Qx2TYx','https://ibb.co/qYMvzZF6','https://ibb.co/vCKYR8SP'],
   28:['https://ibb.co/mCxNxnX4','https://ibb.co/Wvm36zRT','https://ibb.co/9kVJ4Nd5','https://ibb.co/9HJJqdLX','https://ibb.co/60mrZ5Wy','https://ibb.co/8gRxHJgZ'],
   29:['https://ibb.co/9f1Nnhn','https://ibb.co/C5zR5S7B','https://ibb.co/wFyh5zXQ','https://ibb.co/mrcDL4Bt','https://ibb.co/LD51ngvn','https://ibb.co/nMTRtMRT'],
