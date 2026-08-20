@@ -1,0 +1,14 @@
+'use strict';
+const test=require('node:test');const assert=require('node:assert/strict');
+const catalog=require('../utils/styleCatalog');const manager=require('../utils/styleManager');const response=require('../utils/responseStyle');const {sendCarousel}=require('../utils/whatsappCarousel');
+function rng(seed=0x562){let x=seed>>>0;return()=>{x^=x<<13;x^=x>>>17;x^=x<<5;return(x>>>0)/4294967296;};}
+
+test('seeded fuzz: 25000 malformed/edge style payloads stay bounded',()=>{const random=rng();const weird=[null,undefined,-999,999,NaN,'22','x',{},[],31,0,15];for(let i=0;i<25000;i++){const raw=weird[Math.floor(random()*weird.length)];const s=catalog.normalizeStyle(raw);assert.ok(Number.isInteger(s)&&s>=0&&s<=31);const text=`payload-${i}-${'x'.repeat(Math.floor(random()*80))}`;const payload=i%4===0?{text}:i%4===1?{caption:text}:i%4===2?{react:{text:'✅',key:{}}}:{delete:{id:'x'}};const out=response.decoratePayload(payload,s);assert.ok(out&&typeof out==='object');if(payload.react)assert.deepEqual(out,payload);if(payload.delete)assert.deepEqual(out,payload);const rendered=response.renderResponse({type:['info','wait','success','error','denied'][i%5],title:'FUZZ',body:text,style:s});assert.ok(rendered.includes(`payload-${i}`));assert.ok(rendered.length<1000);}});
+
+test('transport matrix: relay success does not invoke text fallback',async()=>{let relays=0,sends=0;const sock={user:{id:'bot@s.whatsapp.net'},relayMessage:async()=>{relays++;},sendMessage:async()=>{sends++;return{key:{id:'x'}};}};const r=await sendCarousel({sock,jid:'u@s.whatsapp.net',cards:[{title:'A',body:'B',buttons:[]}],fallbackText:'fallback'});assert.equal(r.mode,'carousel');assert.equal(relays,1);assert.equal(sends,0);});
+
+test('transport matrix: relay failure + contextual send failure reaches plain fallback',async()=>{let sends=0;const sock={user:{id:'bot@s.whatsapp.net'},relayMessage:async()=>{throw new Error('relay')},sendMessage:async(jid,payload,opts)=>{sends++;if(sends===1)throw new Error('context send');return{key:{id:'plain-ok'}};}};const r=await sendCarousel({sock,jid:'u@s.whatsapp.net',quoted:{key:{id:'q'}},cards:[{title:'A',body:'B',buttons:[]}],contextInfo:{forwardingScore:1},fallbackText:'SAFE'});assert.equal(r.mode,'plain');assert.equal(sends,2);});
+
+test('transport matrix: every send failure propagates instead of silent success',async()=>{const sock={user:{id:'bot@s.whatsapp.net'},relayMessage:async()=>{throw new Error('relay')},sendMessage:async()=>{throw new Error('send')}};await assert.rejects(()=>sendCarousel({sock,jid:'u@s.whatsapp.net',cards:[{title:'A',body:'B',buttons:[]}],fallbackText:'SAFE'}),/send/);});
+
+test('theme switching stress preserves valid final state',async()=>{manager.setStyle(0);const jobs=[];for(let i=0;i<5000;i++)jobs.push(Promise.resolve().then(()=>manager.setStyle(i%32)));await Promise.all(jobs);assert.ok(manager.getStyle()>=0&&manager.getStyle()<=31);manager.setStyle(0);});
