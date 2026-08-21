@@ -13,6 +13,7 @@ const social = require('../../utils/gameCenterWhatsappBlock3');
 const clues = require('../../utils/gameCenterWhatsappBlock4');
 const awards = require('../../utils/gameCenterWhatsappBlock5');
 const anonymous = require('../../utils/gameCenterWhatsappBlock6');
+const progression = require('../../utils/gameCenterWhatsappBlock7');
 
 const prefix=config.prefix||'.';
 const footer=()=>styleManager.getPhrases().footer();
@@ -34,6 +35,7 @@ function menuText(){
     ...clues.menuLines(prefix),
     ...awards.menuLines(prefix),
     ...anonymous.menuLines(prefix),
+    ...progression.menuLines(prefix),
     `${prefix}games list    → 📋 Parties actives`,
     `${prefix}games stop [#id] → 🛑 Arrêter une partie`,
     '',
@@ -146,7 +148,7 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
 
 module.exports={
   name:'games', aliases:['game','jeux','gamecenter'], category:'🎮 Jeux & Fun',
-  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|truth|dare|likely|story|intruder|rebus|daily|character|song|movie|best|crown|secretfriend|anon|list|stop]`,
+  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|truth|dare|likely|story|intruder|rebus|daily|character|song|movie|best|crown|secretfriend|anon|profile|top|achievements|fish|list|stop]`,
   groupOnly:true, adminOnly:false, botAdminNeeded:false,
   async execute(sock,msg,args,extra){
     const from=extra.from, sender=extra.sender;
@@ -192,6 +194,7 @@ module.exports={
       if(g.error)return extra.reply(`⚠️ Une partie de Morpion est déjà active ou la limite est atteinte.${sep()}`);
       return sock.sendMessage(from,{text:`❌⭕ *MORPION*\n\n${g.board.map((v,i)=>i+1).map((v,i)=>`${v}${i%3===2?'\n':' │ '}`).join('').trim()}\n\n❌ ${tag(g.playerX)} commence.\n⭕ ${tag(g.playerO)} joue ensuite.\n\nEnvoyez un chiffre *1 à 9*.\nID : #${g.alias}${sep()}`,mentions:[g.playerX,g.playerO]},{quoted:msg});
     }
+    if(progression.SUPPORTED.has(sub))return progression.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(anonymous.SUPPORTED.has(sub))return anonymous.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(awards.SUPPORTED.has(sub))return awards.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(clues.SUPPORTED.has(sub))return clues.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
