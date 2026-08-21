@@ -14,17 +14,39 @@ const clues = require('../../utils/gameCenterWhatsappBlock4');
 const awards = require('../../utils/gameCenterWhatsappBlock5');
 const anonymous = require('../../utils/gameCenterWhatsappBlock6');
 const progression = require('../../utils/gameCenterWhatsappBlock7');
+const { uno } = require('../../utils/gameCenterUno');
+const { werewolf } = require('../../utils/gameCenterWerewolf');
+
+const delegateModules={
+  casino:require('./casino'),
+  rpg:require('./rpg'),
+  hangman:require('./hangman'),
+  pendu:require('./hangman'),
+  objectzoom:require('./objectzoom'),
+  objetzoom:require('./objectzoom'),
+  chess:require('./chess'),
+  echecs:require('./chess'),
+  'échecs':require('./chess'),
+  uno:require('./uno'),
+  wolf:require('./wolf'),
+  werewolf:require('./wolf'),
+  loupgarou:require('./wolf'),
+  tourney:require('./tourney'),
+  tournament:require('./tourney'),
+  tournoi:require('./tourney')
+};
 
 const prefix=config.prefix||'.';
 const footer=()=>styleManager.getPhrases().footer();
 const sep=()=>`\n\n${footer()}`;
 const tag=id=>`@${String(id||'').split('@')[0]}`;
-const gameLabel=type=>anonymous.labelForType(type)||awards.labelForType(type)||clues.labelForType(type)||social.labelForType(type)||advanced.labelForType(type);
+const EXTRA_LABELS={hangman:'Pendu','object-zoom':'Objet zoomé',chess:'Échecs'};
+const gameLabel=type=>EXTRA_LABELS[type]||anonymous.labelForType(type)||awards.labelForType(type)||clues.labelForType(type)||social.labelForType(type)||advanced.labelForType(type)||type;
 
 function menuText(){
   return [
-    '🎮 *THE BIG DIPPER — GAME CENTER*',
-    '',
+    '🎮 *THE BIG DIPPER — GAME CENTER*','',
+    '⚡ *PARTIES RAPIDES*',
     `${prefix}games prefer  → 🤔 Tu préfères`,
     `${prefix}games chain   → 🔤 Mot en chaîne`,
     `${prefix}games noyesno → 🚫 Ni Oui Ni Non`,
@@ -36,17 +58,32 @@ function menuText(){
     ...awards.menuLines(prefix),
     ...anonymous.menuLines(prefix),
     ...progression.menuLines(prefix),
-    `${prefix}games list    → 📋 Parties actives`,
-    `${prefix}games stop [#id] → 🛑 Arrêter une partie`,
+    '', '🧠 *JEUX AVANCÉS*',
+    `${prefix}games hangman start anime → 🪢 Pendu`,
+    `${prefix}games objectzoom start <réponse> → 🔎 Objet zoomé`,
+    `${prefix}games chess @membre → ♟️ Échecs`,
+    `${prefix}games uno create → 🃏 UNO privé`,
+    `${prefix}games wolf create → 🐺 Loup-Garou privé`,
+    '', '🌍 *PROGRESSION & COMPÉTITION*',
+    `${prefix}games casino → 🎰 Arcade virtuelle`,
+    `${prefix}games rpg → ⚔️ RPG`,
+    `${prefix}games tourney → 🏆 Tournoi intergroupes`,
+    `${prefix}games list → 📋 Parties actives`,
+    `${prefix}games stop [#id] → 🛑 Arrêter une partie moteur`,
     '',
-    '💡 Quand plusieurs parties peuvent comprendre la même réponse, ajoute *#ID* pour viser la bonne partie.'
+    '💡 Les mains UNO, rôles Loup-Garou, choix PFC et actions nocturnes restent privés.',
+    '💡 Quand plusieurs parties comprennent la même réponse, ajoute *#ID*.'
   ].join('\n')+sep();
 }
 
 function activeText(from){
   const rows=engine.list(from);
-  if(!rows.length)return `🎮 *Aucune partie active dans ce groupe.*${sep()}`;
-  return ['🎮 *PARTIES ACTIVES*','',...rows.map((g,i)=>`${i+1}. *${gameLabel(g.type)}*  #${g.alias}`)].join('\n')+sep();
+  const extra=[];
+  const u=uno.status(from); if(u)extra.push(`*UNO* #${u.alias} — ${u.phase}`);
+  const w=werewolf.public(from); if(w)extra.push(`*Loup-Garou* #${w.alias} — ${w.phase}`);
+  const all=[...rows.map(g=>`*${gameLabel(g.type)}* #${g.alias}`),...extra];
+  if(!all.length)return `🎮 *Aucune partie active dans ce groupe.*${sep()}`;
+  return ['🎮 *PARTIES ACTIVES*','',...all.map((x,i)=>`${i+1}. ${x}`)].join('\n')+sep();
 }
 function refFrom(text=''){ return String(text).match(/#([a-z0-9_-]{2,32})/i)?.[1]||null; }
 function stripRef(text=''){ return String(text).replace(/#[a-z0-9_-]{2,32}/ig,'').trim(); }
@@ -148,17 +185,18 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
 
 module.exports={
   name:'games', aliases:['game','jeux','gamecenter'], category:'🎮 Jeux & Fun',
-  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|truth|dare|likely|story|intruder|rebus|daily|character|song|movie|best|crown|secretfriend|anon|profile|top|achievements|fish|list|stop]`,
+  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [jeu|profile|top|fish|casino|rpg|hangman|objectzoom|chess|uno|wolf|tourney|list|stop]`,
   groupOnly:true, adminOnly:false, botAdminNeeded:false,
   async execute(sock,msg,args,extra){
     const from=extra.from, sender=extra.sender;
     const sub=String(args[0]||'').toLowerCase();
     if(!sub||sub==='menu') return extra.reply(menuText());
+    if(delegateModules[sub])return delegateModules[sub].execute(sock,msg,args.slice(1),extra);
     if(sub==='list'||sub==='active') return extra.reply(activeText(from));
     if(sub==='stop'){
       const ref=String(args[1]||'').replace(/^#/,'')||null;
       const rows=engine.list(from);
-      if(!rows.length)return extra.reply(`❌ Aucune partie active.${sep()}`);
+      if(!rows.length)return extra.reply(`❌ Aucune partie moteur active. Pour UNO/Loup-Garou, utilise leurs commandes stop.${sep()}`);
       if(!ref&&rows.length>1)return extra.reply(`⚠️ Plusieurs parties sont actives. Indique l’ID : *${prefix}games stop #ID*.${sep()}`);
       const current=engine.get(from,ref);
       if(!current)return extra.reply(`❌ Aucune partie correspondante.${sep()}`);
@@ -168,7 +206,10 @@ module.exports={
     }
     if(sub==='stopall'){
       if(!extra.isAdmin&&!extra.isOwner&&!extra.isSupremeOwner)return extra.reply(`🔒 Réservé aux admins.${sep()}`);
-      const rows=engine.stopAll(from); return extra.reply(`🛑 ${rows.length} partie(s) arrêtée(s).${sep()}`);
+      let count=engine.stopAll(from).length;
+      if(uno.get(from)){uno.cancel(from);count++;}
+      if(werewolf.get(from)){werewolf.cancel(from);count++;}
+      return extra.reply(`🛑 ${count} partie(s) du groupe arrêtée(s).${sep()}`);
     }
     if(sub==='prefer'){
       const g=engine.startPrefer(from,sender); if(g.error)return extra.reply(`⚠️ Une partie identique existe déjà ou le groupe a trop de parties actives.${sep()}`);
@@ -204,5 +245,7 @@ module.exports={
   },
   handleIncomingGameMessage,
   engine,
-  candidateTypes
+  candidateTypes,
+  menuText,
+  activeText
 };
