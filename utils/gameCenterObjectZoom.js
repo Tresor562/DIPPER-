@@ -37,6 +37,7 @@ if(typeof GameCenterEngine.prototype.startObjectZoom!=='function'){
   };
   GameCenterEngine.prototype.guessObjectZoom=function(chatId,userId,input,ref=null){
     const g=this.get(chatId,ref,'object-zoom');if(!g)return{handled:false};
+    if(userId===g.by)return{handled:true,ok:false,reason:'host',game:clone(g)};
     const guess=norm(input);if(guess.length<2)return{handled:true,ok:false,reason:'short',game:clone(g)};
     const state=live(this,g);state.attempts=state.attempts||{};state.attempts[userId]=state.attempts[userId]||[];
     if(state.attempts[userId].includes(guess))return{handled:true,ok:false,reason:'duplicate',game:clone(state)};
