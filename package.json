@@ -55,7 +55,7 @@
     "node-7z": "^3.0.0",
     "node-fetch": "^2.7.0",
     "node-unrar-js": "^2.0.2",
-    "node-webpmux": "^2.1.7",
+    "node-webpmux": "^3.1.7",
     "pdfjs-dist": "3.11.174",
     "pdfkit": "^0.14.0",
     "pino": "^9.0.0",
