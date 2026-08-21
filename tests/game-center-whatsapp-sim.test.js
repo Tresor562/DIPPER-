@@ -48,7 +48,8 @@ test('simulation 2 000 messages naturels concurrentiels sans réponse parasite h
     for(let g=0;g<5;g++){
       const chat=`group-${g}@g.us`;
       for(let i=0;i<100;i++){
-        const ok=await cmd.handleIncomingGameMessage(sock,msg(chat,`u${i}@s.whatsapp.net','conversation normale sans jeu'),extra(chat,`u${i}@s.whatsapp.net`,sock));
+        const user=`u${i}@s.whatsapp.net`;
+        const ok=await cmd.handleIncomingGameMessage(sock,msg(chat,user,'conversation normale sans jeu'),extra(chat,user,sock));
         if(ok)handled++;
       }
     }
