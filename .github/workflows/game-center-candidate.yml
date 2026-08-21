@@ -32,6 +32,8 @@ jobs:
           node --check utils/gameCenterWhatsappBlock3.js
           node --check utils/gameCenterBlock4.js
           node --check utils/gameCenterWhatsappBlock4.js
+          node --check utils/gameCenterBlock5.js
+          node --check utils/gameCenterWhatsappBlock5.js
           node --check commands/games_entertainment/gamecenter.js
           node --check commands/games_entertainment/rpspick.js
           node --check scripts/install-game-center.js
@@ -77,6 +79,8 @@ jobs:
           node --check utils/gameCenterWhatsappBlock3.js
           node --check utils/gameCenterBlock4.js
           node --check utils/gameCenterWhatsappBlock4.js
+          node --check utils/gameCenterBlock5.js
+          node --check utils/gameCenterWhatsappBlock5.js
           node --check commands/games_entertainment/gamecenter.js
           node --check commands/games_entertainment/rpspick.js
       - name: Full existing test suite on candidate
@@ -132,6 +136,8 @@ jobs:
           node --check utils/gameCenterWhatsappBlock3.js
           node --check utils/gameCenterBlock4.js
           node --check utils/gameCenterWhatsappBlock4.js
+          node --check utils/gameCenterBlock5.js
+          node --check utils/gameCenterWhatsappBlock5.js
       - name: 100000 style and menu simulations
         run: npm run test:style-menu
       - name: Render static simulator
