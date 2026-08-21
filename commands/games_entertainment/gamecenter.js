@@ -17,6 +17,7 @@ function menuText(){
     `${prefix}games chain   → 🔤 Mot en chaîne`,
     `${prefix}games noyesno → 🚫 Ni Oui Ni Non`,
     `${prefix}games number  → 🎯 Devine le nombre`,
+    `${prefix}games ttt @membre → ❌⭕ Morpion`,
     `${prefix}games list    → 📋 Parties actives`,
     `${prefix}games stop [#id] → 🛑 Arrêter une partie`,
     '',
@@ -29,13 +30,13 @@ function activeText(from){
   if(!rows.length)return `🎮 *Aucune partie active dans ce groupe.*${sep()}`;
   return ['🎮 *PARTIES ACTIVES*','',...rows.map((g,i)=>`${i+1}. *${g.type}*  #${g.alias}`)].join('\n')+sep();
 }
-
 function refFrom(text=''){ return String(text).match(/#([a-z0-9_-]{2,32})/i)?.[1]||null; }
 function stripRef(text=''){ return String(text).replace(/#[a-z0-9_-]{2,32}/ig,'').trim(); }
 function candidateTypes(rows,input){
   const n=String(input||'').trim().toLowerCase(); const set=new Set();
   if(rows.some(g=>g.type==='prefer')&&/^(1|2|a|b|gauche|droite)$/i.test(n))set.add('prefer');
   if(rows.some(g=>g.type==='guess-number')&&/^-?\d+$/.test(n))set.add('guess-number');
+  if(rows.some(g=>g.type==='tic-tac-toe')&&/^[1-9]$/.test(n))set.add('tic-tac-toe');
   if(rows.some(g=>g.type==='word-chain')&&/^[a-zA-ZÀ-ÿ-]{2,}$/.test(n))set.add('word-chain');
   return [...set];
 }
@@ -48,15 +49,12 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
   if(!body||body.startsWith(prefix))return false;
   const ref=refFrom(body), cleaned=stripRef(body);
 
-  // Ni Oui Ni Non observe le langage naturel indépendamment des autres jeux.
-  const nyn=engine.inspectNoYesNo(from,sender,cleaned,ref);
+  const nyn=engine.inspectNoYesNo(from,sender,cleaned);
   if(nyn.handled&&nyn.eliminated){
     await sock.sendMessage(from,{text:`🚫 ${tag(sender)} a dit *${nyn.word.toUpperCase()}* !\n💥 Éliminé(e) de la partie #${nyn.game.alias}.${sep()}`,mentions:[sender]},{quoted:msg});
     return true;
   }
 
-  // Si une réponse peut appartenir à plusieurs parties actives, on refuse de deviner.
-  // L'utilisateur choisit explicitement avec #ID : aucune partie ne vole la réponse d'une autre.
   if(!ref){
     const interactive=engine.list(from).filter(g=>g.type!=='no-yes-no');
     const candidates=candidateTypes(interactive,cleaned);
@@ -83,6 +81,20 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
     return true;
   }
 
+  const ttt=engine.playTicTacToe(from,sender,cleaned,ref);
+  if(ttt.handled){
+    let text;
+    if(!ttt.ok&&ttt.reason==='not-player') text='🔒 Cette partie appartient aux deux joueurs défiés.';
+    else if(!ttt.ok&&ttt.reason==='turn') text=`⏳ Ce n’est pas ton tour. #${ttt.game.alias}`;
+    else if(!ttt.ok&&ttt.reason==='occupied') text=`⚠️ Cette case est déjà prise. #${ttt.game.alias}`;
+    else if(ttt.won) text=`❌⭕ *MORPION*\n\n${ttt.board}\n\n🏆 ${tag(sender)} gagne la partie #${ttt.game.alias} !`;
+    else if(ttt.draw) text=`❌⭕ *MORPION*\n\n${ttt.board}\n\n🤝 Match nul. Partie #${ttt.game.alias} terminée.`;
+    else text=`❌⭕ *MORPION*\n\n${ttt.board}\n\n➡️ À ${tag(ttt.next)} de jouer.\nID : #${ttt.game.alias}`;
+    const mentions=[sender,ttt.next].filter(Boolean);
+    await sock.sendMessage(from,{text:text+sep(),mentions},{quoted:msg});
+    return true;
+  }
+
   const chain=engine.playChain(from,sender,cleaned,ref);
   if(chain.handled){
     let text;
@@ -97,7 +109,7 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
 
 module.exports={
   name:'games', aliases:['game','jeux','gamecenter'], category:'🎮 Jeux & Fun',
-  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|list|stop]`,
+  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|list|stop]`,
   groupOnly:true, adminOnly:false, botAdminNeeded:false,
   async execute(sock,msg,args,extra){
     const from=extra.from, sender=extra.sender;
@@ -114,20 +126,28 @@ module.exports={
       const rows=engine.stopAll(from); return extra.reply(`🛑 ${rows.length} partie(s) arrêtée(s).${sep()}`);
     }
     if(sub==='prefer'){
-      const g=engine.startPrefer(from,sender); if(g.error)return extra.reply(`⚠️ Trop de parties actives ici. Termine-en une avant d'en lancer une autre.${sep()}`);
+      const g=engine.startPrefer(from,sender); if(g.error)return extra.reply(`⚠️ Une partie identique existe déjà ou le groupe a trop de parties actives.${sep()}`);
       return extra.reply(`🤔 *TU PRÉFÈRES...*\n\n1️⃣ ${g.choices[0]}\n2️⃣ ${g.choices[1]}\n\nRéponds *1* ou *2*.\nID : #${g.alias}${sep()}`);
     }
     if(sub==='chain'){
-      const g=engine.startChain(from,sender); if(g.error)return extra.reply(`⚠️ Trop de parties actives ici.${sep()}`);
+      const g=engine.startChain(from,sender); if(g.error)return extra.reply(`⚠️ Une partie Mot en chaîne est déjà active ou la limite est atteinte.${sep()}`);
       return extra.reply(`🔤 *MOT EN CHAÎNE*\n\nMot de départ : *${g.lastWord.toUpperCase()}*\n➡️ Envoie un mot qui commence par *${g.lastWord.slice(-1).toUpperCase()}*.\nID : #${g.alias}${sep()}`);
     }
     if(sub==='noyesno'||sub==='niouininon'){
-      const g=engine.startNoYesNo(from,sender); if(g.error)return extra.reply(`⚠️ Trop de parties actives ici.${sep()}`);
+      const g=engine.startNoYesNo(from,sender); if(g.error)return extra.reply(`⚠️ Une partie Ni Oui Ni Non est déjà active ou la limite est atteinte.${sep()}`);
       return extra.reply(`🚫 *NI OUI NI NON*\n\nÀ partir de maintenant, le bot surveille les réponses naturelles du groupe.\nDire *oui* ou *non* = élimination.\nID : #${g.alias}${sep()}`);
     }
     if(sub==='number'||sub==='nombre'){
-      const min=Number(args[1])||1,max=Number(args[2])||100; const g=engine.startGuessNumber(from,sender,{min,max}); if(g.error)return extra.reply(`⚠️ Trop de parties actives ici.${sep()}`);
+      const min=Number(args[1])||1,max=Number(args[2])||100; const g=engine.startGuessNumber(from,sender,{min,max}); if(g.error)return extra.reply(`⚠️ Une partie Devine le nombre est déjà active ou la limite est atteinte.${sep()}`);
       return extra.reply(`🎯 *DEVINE LE NOMBRE*\n\nJ'ai choisi un nombre entre *${g.min}* et *${g.max}*.\nEnvoie tes propositions directement dans le groupe.\nID : #${g.alias}${sep()}`);
+    }
+    if(['ttt','morpion','tictactoe'].includes(sub)){
+      const ctx=msg.message?.extendedTextMessage?.contextInfo||{};
+      const opponent=(ctx.mentionedJid||[])[0]||ctx.participant||null;
+      const g=engine.startTicTacToe(from,sender,opponent);
+      if(g.error==='opponent')return extra.reply(`❌ Mentionne un autre membre : *${prefix}games ttt @membre*${sep()}`);
+      if(g.error)return extra.reply(`⚠️ Une partie de Morpion est déjà active ou la limite est atteinte.${sep()}`);
+      return sock.sendMessage(from,{text:`❌⭕ *MORPION*\n\n${g.board.map((v,i)=>i+1).map((v,i)=>`${v}${i%3===2?'\n':' │ '}`).join('').trim()}\n\n❌ ${tag(g.playerX)} commence.\n⭕ ${tag(g.playerO)} joue ensuite.\n\nEnvoyez un chiffre *1 à 9*.\nID : #${g.alias}${sep()}`,mentions:[g.playerX,g.playerO]},{quoted:msg});
     }
     return extra.reply(menuText());
   },
