@@ -33,8 +33,10 @@ module.exports={
     }
     if(sub==='force'){
       const g=werewolf.get(from);if(!g)return extra.reply(`❌ Aucune partie active.${sep()}`);if(sender!==g.host&&!extra.isAdmin&&!extra.isOwner&&!extra.isSupremeOwner)return extra.reply(`🔒 Réservé à l’hôte/admin.${sep()}`);
-      let r;if(g.phase==='night'){g.night.seerDone=true;g.night.doctorDone=true;const state=werewolf._ensure().games[from];state.night.seerDone=true;state.night.doctorDone=true;state.updatedAt=Date.now();werewolf._save();r=werewolf.resolveNight(from);}else if(g.phase==='day')r=werewolf.resolveDay(from);else return extra.reply(`❌ Rien à forcer dans le lobby.${sep()}`);
-      if(r.finished)return sock.sendMessage(from,{text:finishText(r)+sep(),mentions:r.game.players},{quoted:msg});if(g.phase==='night'){const line=r.victim&&!r.saved?`🌅 ${tag(r.victim)} n’a pas survécu à la nuit.`:'🌅 Personne ne meurt cette nuit.';return sock.sendMessage(from,{text:`${line}\n☀️ Votez avec *${prefix}wolf vote <numéro>*.${sep()}`,mentions:r.game.players},{quoted:msg});}return sock.sendMessage(from,{text:`☀️ ${r.eliminated?`${tag(r.eliminated)} est éliminé(e).`:'Personne n’est éliminé.'}\n🌙 Nuit ${r.game.round}.${sep()}`,mentions:r.game.players},{quoted:msg});
+      const previousPhase=g.phase,r=werewolf.forceResolve(from);if(r.error==='phase')return extra.reply(`❌ Rien à forcer dans le lobby.${sep()}`);if(r.error)return extra.reply(`❌ Impossible de résoudre cette phase.${sep()}`);
+      if(r.finished)return sock.sendMessage(from,{text:finishText(r)+sep(),mentions:r.game.players},{quoted:msg});
+      if(previousPhase==='night'){const line=r.victim&&!r.saved?`🌅 ${tag(r.victim)} n’a pas survécu à la nuit.`:'🌅 Personne ne meurt cette nuit.';return sock.sendMessage(from,{text:`${line}\n☀️ Votez avec *${prefix}wolf vote <numéro>*.${sep()}`,mentions:r.game.players},{quoted:msg});}
+      return sock.sendMessage(from,{text:`☀️ ${r.eliminated?`${tag(r.eliminated)} est éliminé(e).`:'Personne n’est éliminé.'}\n🌙 Nuit ${r.game.round}.${sep()}`,mentions:r.game.players},{quoted:msg});
     }
     if(sub==='stop'){const g=werewolf.get(from);if(!g)return extra.reply(`❌ Aucune partie active.${sep()}`);if(sender!==g.host&&!extra.isAdmin&&!extra.isOwner&&!extra.isSupremeOwner)return extra.reply(`🔒 Réservé à l’hôte/admin.${sep()}`);werewolf.cancel(from);return extra.reply(`🛑 Partie Loup-Garou annulée sans résultat.${sep()}`);}
     return extra.reply(`❓ Utilise *${prefix}wolf* pour l’aide.${sep()}`);
