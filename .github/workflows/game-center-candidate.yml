@@ -1,6 +1,8 @@
 name: Game Center Candidate
 
 on:
+  push:
+    branches: [candidate/game-center-v1]
   pull_request:
     branches: [main]
   workflow_dispatch:
