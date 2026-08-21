@@ -1,0 +1,44 @@
+name: Game Center Candidate
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: game-center-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  game-center:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install production dependencies
+        run: npm install --omit=dev --no-audit --no-fund
+      - name: Game Center syntax and idempotent install
+        run: |
+          node --check utils/gameCenterEngine.js
+          node --check commands/games_entertainment/gamecenter.js
+          node --check scripts/install-game-center.js
+          node scripts/install-game-center.js
+          node scripts/install-game-center.js
+          test "$(grep -c '\[DIPPER GAME CENTER V1\]' handler.js)" -eq 1
+      - name: Game Center tests and WhatsApp simulations
+        run: npm run test:game-center
+      - name: Existing command validation
+        run: npm run validate:commands
+      - name: Existing command four-pass audit
+        run: npm run audit:commands:4x
+      - name: Existing response-style audits
+        run: |
+          npm run audit:visual-responses
+          npm run audit:silent-responses
+      - name: Render build simulation
+        run: npm run render:simulate
+      - name: Full existing test suite
+        run: node --test --test-force-exit tests/
