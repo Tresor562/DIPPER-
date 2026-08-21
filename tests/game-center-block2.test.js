@@ -16,7 +16,7 @@ function wrongQuizChoice(q){ return String(((q.answer+1)%4)+1); }
 function freshCommand(){
   const enginePath=require.resolve('../utils/gameCenterEngine');
   const blockPath=require.resolve('../utils/gameCenterBlock2');
-  const advancedPath=require.resolve('../commands/games_entertainment/gamecenterBlock2');
+  const advancedPath=require.resolve('../utils/gameCenterWhatsappBlock2');
   const cmdPath=require.resolve('../commands/games_entertainment/gamecenter');
   delete require.cache[cmdPath]; delete require.cache[advancedPath]; delete require.cache[blockPath]; delete require.cache[enginePath];
   const mod=require('../utils/gameCenterEngine');
