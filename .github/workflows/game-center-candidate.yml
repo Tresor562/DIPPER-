@@ -14,7 +14,7 @@ concurrency:
 jobs:
   game-center:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,6 +26,7 @@ jobs:
         run: |
           node --check utils/gameCenterEngine.js
           node --check commands/games_entertainment/gamecenter.js
+          node --check commands/games_entertainment/rpspick.js
           node --check scripts/install-game-center.js
           node scripts/install-game-center.js
           node scripts/install-game-center.js
@@ -36,6 +37,11 @@ jobs:
         run: npm run validate:commands
       - name: Existing command four-pass audit
         run: npm run audit:commands:4x
+      - name: Prepare response discipline before style audits
+        run: |
+          node scripts/install-response-style.js
+          node scripts/install-game-center.js
+          test "$(grep -c '\[DIPPER GAME CENTER V1\]' handler.js)" -eq 1
       - name: Existing response-style audits
         run: |
           npm run audit:visual-responses
