@@ -25,7 +25,9 @@ jobs:
       - name: Game Center syntax and idempotent install
         run: |
           node --check utils/gameCenterEngine.js
+          node --check utils/gameCenterBlock2.js
           node --check commands/games_entertainment/gamecenter.js
+          node --check commands/games_entertainment/gamecenterBlock2.js
           node --check commands/games_entertainment/rpspick.js
           node --check scripts/install-game-center.js
           node scripts/install-game-center.js
