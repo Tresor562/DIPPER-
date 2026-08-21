@@ -28,7 +28,7 @@ function menuLines(prefix){
 }
 function plausibleGuess(input){
   const value=String(input||'').trim();
-  if(!value||/^(vote\b|\+\s)/i.test(value)||/^\d+$/.test(value))return false;
+  if(!value||/^(vote\b|best\b|\+\s)/i.test(value)||/^\d+$/.test(value))return false;
   return /[a-zA-ZÀ-ÿ]/.test(value)&&value.replace(/\s+/g,'').length>=2;
 }
 function candidateTypes(rows,input){
