@@ -14,7 +14,7 @@
     "start:railway": "node --expose-gc index.js",
     "test": "node --test tests/",
     "test:style-menu": "node --test tests/style-menu-v2.test.js tests/style-menu-fuzz.test.js",
-    "test:game-center": "node scripts/install-game-center.js && node --test tests/game-center.test.js tests/game-center-whatsapp-sim.test.js tests/game-center-block2.test.js tests/game-center-block3.test.js tests/game-center-block4.test.js tests/game-center-block5.test.js tests/game-center-block6.test.js tests/game-center-block7.test.js tests/game-center-block8.test.js tests/game-center-block8-whatsapp.test.js tests/game-center-block9.test.js tests/game-center-block9-whatsapp.test.js",
+    "test:game-center": "node scripts/install-game-center.js && node --test tests/game-center.test.js tests/game-center-whatsapp-sim.test.js tests/game-center-block2.test.js tests/game-center-block3.test.js tests/game-center-block4.test.js tests/game-center-block5.test.js tests/game-center-block6.test.js tests/game-center-block7.test.js tests/game-center-block8.test.js tests/game-center-block8-whatsapp.test.js tests/game-center-block9.test.js tests/game-center-block9-whatsapp.test.js tests/game-center-block10.test.js",
     "render:simulate": "node scripts/render-build-sim.js",
     "test:hot-updater": "node --test tests/hot-command-updater.test.js tests/hot-oidc-auth.test.js tests/hot-installer.test.js tests/hot-release-crypto.test.js tests/hot-release-poller.test.js",
     "validate:commands": "node scripts/install-command-alias-ownership.js && node scripts/validate-commands.js",
