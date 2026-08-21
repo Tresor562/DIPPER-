@@ -4,12 +4,15 @@ const config = require('../../config');
 const styleManager = require('../../utils/styleManager');
 const { engine } = require('../../utils/gameCenterEngine');
 require('../../utils/gameCenterBlock2');
+require('../../utils/gameCenterBlock3');
 const advanced = require('../../utils/gameCenterWhatsappBlock2');
+const social = require('../../utils/gameCenterWhatsappBlock3');
 
 const prefix=config.prefix||'.';
 const footer=()=>styleManager.getPhrases().footer();
 const sep=()=>`\n\n${footer()}`;
 const tag=id=>`@${String(id||'').split('@')[0]}`;
+const gameLabel=type=>social.labelForType(type)||advanced.labelForType(type);
 
 function menuText(){
   return [
@@ -21,6 +24,7 @@ function menuText(){
     `${prefix}games number  → 🎯 Devine le nombre`,
     `${prefix}games ttt @membre → ❌⭕ Morpion`,
     ...advanced.menuLines(prefix),
+    ...social.menuLines(prefix),
     `${prefix}games list    → 📋 Parties actives`,
     `${prefix}games stop [#id] → 🛑 Arrêter une partie`,
     '',
@@ -31,7 +35,7 @@ function menuText(){
 function activeText(from){
   const rows=engine.list(from);
   if(!rows.length)return `🎮 *Aucune partie active dans ce groupe.*${sep()}`;
-  return ['🎮 *PARTIES ACTIVES*','',...rows.map((g,i)=>`${i+1}. *${advanced.labelForType(g.type)}*  #${g.alias}`)].join('\n')+sep();
+  return ['🎮 *PARTIES ACTIVES*','',...rows.map((g,i)=>`${i+1}. *${gameLabel(g.type)}*  #${g.alias}`)].join('\n')+sep();
 }
 function refFrom(text=''){ return String(text).match(/#([a-z0-9_-]{2,32})/i)?.[1]||null; }
 function stripRef(text=''){ return String(text).replace(/#[a-z0-9_-]{2,32}/ig,'').trim(); }
@@ -42,6 +46,7 @@ function candidateTypes(rows,input){
   if(rows.some(g=>g.type==='tic-tac-toe')&&/^[1-9]$/.test(n))set.add('tic-tac-toe');
   if(rows.some(g=>g.type==='word-chain')&&/^[a-zA-ZÀ-ÿ-]{2,}$/.test(n))set.add('word-chain');
   for(const type of advanced.candidateTypes(rows,n))set.add(type);
+  for(const type of social.candidateTypes(rows,n))set.add(type);
   return [...set];
 }
 
@@ -60,15 +65,16 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
   }
 
   if(!ref){
-    const interactive=engine.list(from).filter(g=>g.type!=='no-yes-no'&&g.type!=='rps');
+    const interactive=engine.list(from).filter(g=>g.type!=='no-yes-no'&&g.type!=='rps'&&g.type!=='truth-dare');
     const candidates=candidateTypes(interactive,cleaned);
     if(candidates.length>1){
-      const ids=interactive.filter(g=>candidates.includes(g.type)).map(g=>`#${g.alias} (${advanced.labelForType(g.type)})`).join(' • ');
+      const ids=interactive.filter(g=>candidates.includes(g.type)).map(g=>`#${g.alias} (${gameLabel(g.type)})`).join(' • ');
       await sock.sendMessage(from,{text:`🎮 *Réponse ambiguë*\nCette réponse peut aller à plusieurs parties : ${ids}\n\nRenvoie-la avec l’ID, ex. *${cleaned} #abcdef*.${sep()}`},{quoted:msg});
       return true;
     }
   }
 
+  if(await social.handleIncoming(sock,msg,extra,{from,sender,cleaned,ref,sep,tag}))return true;
   if(await advanced.handleIncoming(sock,msg,extra,{from,sender,cleaned,ref,sep,tag}))return true;
 
   const prefer=engine.votePrefer(from,sender,cleaned,ref);
@@ -115,7 +121,7 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
 
 module.exports={
   name:'games', aliases:['game','jeux','gamecenter'], category:'🎮 Jeux & Fun',
-  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|list|stop]`,
+  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|truth|dare|likely|story|intruder|rebus|daily|list|stop]`,
   groupOnly:true, adminOnly:false, botAdminNeeded:false,
   async execute(sock,msg,args,extra){
     const from=extra.from, sender=extra.sender;
@@ -131,7 +137,7 @@ module.exports={
       if(!current)return extra.reply(`❌ Aucune partie correspondante.${sep()}`);
       if(!advanced.canManage(current,sender,extra))return extra.reply(`🔒 Seul le créateur, un joueur du duel ou un admin peut arrêter cette partie.${sep()}`);
       const g=engine.stop(from,current.alias);
-      return extra.reply(`🛑 Partie *${advanced.labelForType(g.type)}* #${g.alias} arrêtée.${sep()}`);
+      return extra.reply(`🛑 Partie *${gameLabel(g.type)}* #${g.alias} arrêtée.${sep()}`);
     }
     if(sub==='stopall'){
       if(!extra.isAdmin&&!extra.isOwner&&!extra.isSupremeOwner)return extra.reply(`🔒 Réservé aux admins.${sep()}`);
@@ -161,6 +167,7 @@ module.exports={
       if(g.error)return extra.reply(`⚠️ Une partie de Morpion est déjà active ou la limite est atteinte.${sep()}`);
       return sock.sendMessage(from,{text:`❌⭕ *MORPION*\n\n${g.board.map((v,i)=>i+1).map((v,i)=>`${v}${i%3===2?'\n':' │ '}`).join('').trim()}\n\n❌ ${tag(g.playerX)} commence.\n⭕ ${tag(g.playerO)} joue ensuite.\n\nEnvoyez un chiffre *1 à 9*.\nID : #${g.alias}${sep()}`,mentions:[g.playerX,g.playerO]},{quoted:msg});
     }
+    if(social.SUPPORTED.has(sub))return social.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(advanced.SUPPORTED.has(sub))return advanced.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     return extra.reply(menuText());
   },
