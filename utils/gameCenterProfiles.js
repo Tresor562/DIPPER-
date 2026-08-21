@@ -76,7 +76,13 @@ class GameProfileStore{
     for(const id of wanted){ if(!have.has(id)){ const item={...catalog[id],unlockedAt:Date.now()}; p.achievements.push(item); have.add(id); added.push(item); } }
     p.achievements=p.achievements.slice(-MAX_ACHIEVEMENTS); return added;
   }
-  get(userId,{create=true}={}){ const map=this._ensure(),key=String(userId); if(!map.has(key)&&!create)return null; const p=this._live(key); if(create&&!fs.existsSync(this._file()))this._save(); return clone(p); }
+  get(userId,{create=true}={}){
+    const map=this._ensure(),key=String(userId),existed=map.has(key);
+    if(!existed&&!create)return null;
+    const p=this._live(key);
+    if(create&&!existed)this._save();
+    return clone(p);
+  }
   addXp(userId,amount){ const p=this._live(userId),before=p.level; p.xp=clampInt(p.xp+amount,0,MAX_XP); p.level=levelFromXp(p.xp); p.updatedAt=Date.now(); const achievements=this._unlock(p); this._save(); return {profile:clone(p),levelUp:p.level>before,achievements}; }
   addCoins(userId,amount){ const p=this._live(userId); p.coins=clampInt(p.coins+amount,0,MAX_COINS); p.updatedAt=Date.now(); const achievements=this._unlock(p); this._save(); return {profile:clone(p),achievements}; }
   spendCoins(userId,amount){ amount=clampInt(amount,0,MAX_COINS); const p=this._live(userId); if(amount<=0)return {ok:false,error:'amount',profile:clone(p)}; if(p.coins<amount)return {ok:false,error:'funds',profile:clone(p)}; p.coins-=amount; p.updatedAt=Date.now(); this._save(); return {ok:true,profile:clone(p)}; }
