@@ -26,8 +26,8 @@ jobs:
         run: |
           node --check utils/gameCenterEngine.js
           node --check utils/gameCenterBlock2.js
+          node --check utils/gameCenterWhatsappBlock2.js
           node --check commands/games_entertainment/gamecenter.js
-          node --check commands/games_entertainment/gamecenterBlock2.js
           node --check commands/games_entertainment/rpspick.js
           node --check scripts/install-game-center.js
           node scripts/install-game-center.js
@@ -35,6 +35,8 @@ jobs:
           test "$(grep -c '\[DIPPER GAME CENTER V1\]' handler.js)" -eq 1
       - name: Game Center tests and WhatsApp simulations
         run: npm run test:game-center
+      - name: Render build simulation on clean menu state
+        run: npm run render:simulate
       - name: Existing command validation
         run: npm run validate:commands
       - name: Existing command four-pass audit
@@ -48,7 +50,5 @@ jobs:
         run: |
           npm run audit:visual-responses
           npm run audit:silent-responses
-      - name: Render build simulation
-        run: npm run render:simulate
       - name: Full existing test suite
         run: node --test --test-force-exit tests/
