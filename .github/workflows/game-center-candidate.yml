@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   game-center:
+    name: Game Center regression suite
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -35,8 +36,6 @@ jobs:
           test "$(grep -c '\[DIPPER GAME CENTER V1\]' handler.js)" -eq 1
       - name: Game Center tests and WhatsApp simulations
         run: npm run test:game-center
-      - name: Render build simulation on clean menu state
-        run: npm run render:simulate
       - name: Existing command validation
         run: npm run validate:commands
       - name: Existing command four-pass audit
@@ -52,3 +51,67 @@ jobs:
           npm run audit:silent-responses
       - name: Full existing test suite
         run: node --test --test-force-exit tests/
+
+  render-sim:
+    name: Game Center Render + health simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+      PORT: '10000'
+      PUBLIC_MODE: 'true'
+      RENDER: 'true'
+      NODE_ENV: 'production'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Clean Render-like install
+        run: npm install --no-audit --no-fund
+      - name: Render prestart installers
+        run: npm run prestart
+      - name: Prestart idempotence and Game Center hook survival
+        run: |
+          npm run prestart
+          test "$(grep -c '\[DIPPER GAME CENTER V1\]' handler.js)" -eq 1
+          node --check handler.js
+          node --check index.js
+          node --check api/server.js
+      - name: 100000 style and menu simulations
+        run: npm run test:style-menu
+      - name: Render static simulator
+        run: npm run render:simulate
+      - name: Validate all commands after Render installers
+        run: npm run validate:commands
+      - name: Game Center tests after Render installers
+        run: npm run test:game-center
+      - name: Boot and healthcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm start > /tmp/dipper-game-center-boot.log 2>&1 &
+          PID=$!
+          ok=0
+          for i in $(seq 1 25); do
+            if curl --silent --fail http://127.0.0.1:${PORT}/health | grep -q '"status":"ok"'; then
+              ok=1
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              cat /tmp/dipper-game-center-boot.log
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            cat /tmp/dipper-game-center-boot.log
+            kill "$PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          echo 'Game Center Render boot + /health OK'
