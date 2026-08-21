@@ -7,16 +7,18 @@ require('../../utils/gameCenterBlock2');
 require('../../utils/gameCenterBlock3');
 require('../../utils/gameCenterBlock4');
 require('../../utils/gameCenterBlock5');
+require('../../utils/gameCenterBlock6');
 const advanced = require('../../utils/gameCenterWhatsappBlock2');
 const social = require('../../utils/gameCenterWhatsappBlock3');
 const clues = require('../../utils/gameCenterWhatsappBlock4');
 const awards = require('../../utils/gameCenterWhatsappBlock5');
+const anonymous = require('../../utils/gameCenterWhatsappBlock6');
 
 const prefix=config.prefix||'.';
 const footer=()=>styleManager.getPhrases().footer();
 const sep=()=>`\n\n${footer()}`;
 const tag=id=>`@${String(id||'').split('@')[0]}`;
-const gameLabel=type=>awards.labelForType(type)||clues.labelForType(type)||social.labelForType(type)||advanced.labelForType(type);
+const gameLabel=type=>anonymous.labelForType(type)||awards.labelForType(type)||clues.labelForType(type)||social.labelForType(type)||advanced.labelForType(type);
 
 function menuText(){
   return [
@@ -31,6 +33,7 @@ function menuText(){
     ...social.menuLines(prefix),
     ...clues.menuLines(prefix),
     ...awards.menuLines(prefix),
+    ...anonymous.menuLines(prefix),
     `${prefix}games list    → 📋 Parties actives`,
     `${prefix}games stop [#id] → 🛑 Arrêter une partie`,
     '',
@@ -85,7 +88,7 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
   }
 
   if(!ref){
-    const interactive=active.filter(g=>g.type!=='no-yes-no'&&g.type!=='rps'&&g.type!=='truth-dare');
+    const interactive=active.filter(g=>g.type!=='no-yes-no'&&g.type!=='rps'&&g.type!=='truth-dare'&&g.type!=='anonymous-inbox');
     const candidates=candidateTypes(interactive,cleaned);
     if(candidates.length>1){
       const ids=interactive.filter(g=>candidates.includes(g.type)).map(g=>`#${g.alias} (${gameLabel(g.type)})`).join(' • ');
@@ -143,7 +146,7 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
 
 module.exports={
   name:'games', aliases:['game','jeux','gamecenter'], category:'🎮 Jeux & Fun',
-  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|truth|dare|likely|story|intruder|rebus|daily|character|song|movie|best|crown|secretfriend|list|stop]`,
+  description:'Centre de jeux multijoueurs de THE BIG DIPPER', usage:`${prefix}games [prefer|chain|noyesno|number|ttt|quiz|riddle|math|rps|dice|draw|truth|dare|likely|story|intruder|rebus|daily|character|song|movie|best|crown|secretfriend|anon|list|stop]`,
   groupOnly:true, adminOnly:false, botAdminNeeded:false,
   async execute(sock,msg,args,extra){
     const from=extra.from, sender=extra.sender;
@@ -189,6 +192,7 @@ module.exports={
       if(g.error)return extra.reply(`⚠️ Une partie de Morpion est déjà active ou la limite est atteinte.${sep()}`);
       return sock.sendMessage(from,{text:`❌⭕ *MORPION*\n\n${g.board.map((v,i)=>i+1).map((v,i)=>`${v}${i%3===2?'\n':' │ '}`).join('').trim()}\n\n❌ ${tag(g.playerX)} commence.\n⭕ ${tag(g.playerO)} joue ensuite.\n\nEnvoyez un chiffre *1 à 9*.\nID : #${g.alias}${sep()}`,mentions:[g.playerX,g.playerO]},{quoted:msg});
     }
+    if(anonymous.SUPPORTED.has(sub))return anonymous.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(awards.SUPPORTED.has(sub))return awards.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(clues.SUPPORTED.has(sub))return clues.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
     if(social.SUPPORTED.has(sub))return social.handleSubcommand(sock,msg,args,extra,{prefix,sep,tag});
