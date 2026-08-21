@@ -34,7 +34,7 @@ test('tu préfères remplace le vote, sans double comptage',()=>{
 
 test('mot en chaîne applique lettre et unicité',()=>{
   const e=new GameCenterEngine({root:temp()});
-  run('chain',()=>{ const g=e.startChain('g@g.us','a'); const expected=g.lastWord.slice(-1); const good=expected+'test'; let r=e.playChain('g@g.us','u',good,g.alias); assert.equal(r.ok,true); r=e.playChain('g@g.us','u',good,g.alias); assert.equal(r.reason,'used'); });
+  run('chain',()=>{ const g=e.startChain('g@g.us','a'); const expected=g.lastWord.slice(-1); const good=expected+'test'+expected; let r=e.playChain('g@g.us','u',good,g.alias); assert.equal(r.ok,true); r=e.playChain('g@g.us','u',good,g.alias); assert.equal(r.reason,'used'); });
 });
 
 test('ni oui ni non ignore sous-chaînes et élimine mots entiers',()=>{
