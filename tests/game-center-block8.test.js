@@ -18,6 +18,7 @@ function noCooldown(store){ store._cooldown=()=>0; }
 function setHand(store,chat,user,{player,dealer,deck=[]}){ const state=store._ensure(),key=store._key(chat,user),h=state.hands[key]; h.player=player;h.dealer=dealer;h.deck=deck;h.updatedAt=Date.now();store._save();return h; }
 
 const C=(rank,suit='♠️')=>({rank,suit});
+const keepDeck=(min,max)=>max-1;
 
 test('Casino virtuel: bornes de mise strictes',()=>{
   const {casino}=setup(); run('casino-bet',()=>{
@@ -57,7 +58,7 @@ test('Roulette: rouge gagne x2, zéro fait perdre pair, numéro exact gagne x36'
     let r=casino.roulette('u',10,'rouge',{randomInt:()=>1,ts:1});assert.equal(r.won,true);assert.equal(r.payout,20);
     r=casino.roulette('u',10,'pair',{randomInt:()=>0,ts:2});assert.equal(r.won,false);assert.equal(r.payout,0);
     r=casino.roulette('u',10,'17',{randomInt:()=>17,ts:3});assert.equal(r.won,true);assert.equal(r.payout,360);
-    assert.equal(profiles.get('u').coins,start+10-10+350);
+    assert.equal(profiles.get('u').coins,start+350);
   });
 });
 
@@ -83,7 +84,7 @@ test('Paquet blackjack: 52 cartes uniques et valeur des As correcte',()=>{
 
 test('Blackjack: victoire dealer bust paie x2 puis toute répétition est impossible',()=>{
   const {casino,profiles}=setup();run('casino-bj-win',()=>{
-    const before=profiles.get('u').coins;const start=casino.startBlackjack('g','u',20,{randomInt:(a)=>a});assert.equal(start.ok,true);
+    const before=profiles.get('u').coins;const start=casino.startBlackjack('g','u',20,{randomInt:keepDeck});assert.equal(start.ok,true);assert.equal(start.finished,false);
     setHand(casino,'g','u',{player:[C('K'),C('Q')],dealer:[C('9'),C('7')],deck:[C('10')]});
     const r=casino.standBlackjack('g','u');assert.equal(r.outcome,'win');assert.equal(r.payout,40);assert.equal(profiles.get('u').coins,before+20);
     const balance=profiles.get('u').coins;assert.equal(casino.standBlackjack('g','u').error,'not-found');assert.equal(profiles.get('u').coins,balance);
@@ -92,7 +93,7 @@ test('Blackjack: victoire dealer bust paie x2 puis toute répétition est imposs
 
 test('Blackjack: égalité rembourse exactement la mise',()=>{
   const {casino,profiles}=setup();run('casino-bj-push',()=>{
-    const before=profiles.get('u').coins;casino.startBlackjack('g','u',30,{randomInt:(a)=>a});
+    const before=profiles.get('u').coins;const start=casino.startBlackjack('g','u',30,{randomInt:keepDeck});assert.equal(start.finished,false);
     setHand(casino,'g','u',{player:[C('K'),C('8')],dealer:[C('Q'),C('8')],deck:[]});
     const r=casino.standBlackjack('g','u');assert.equal(r.outcome,'push');assert.equal(r.payout,30);assert.equal(profiles.get('u').coins,before);
   });
@@ -100,7 +101,7 @@ test('Blackjack: égalité rembourse exactement la mise',()=>{
 
 test('Blackjack: bust ne paie rien et supprime la main',()=>{
   const {casino,profiles}=setup();run('casino-bj-bust',()=>{
-    const before=profiles.get('u').coins;casino.startBlackjack('g','u',25,{randomInt:(a)=>a});
+    const before=profiles.get('u').coins;const start=casino.startBlackjack('g','u',25,{randomInt:keepDeck});assert.equal(start.finished,false);
     setHand(casino,'g','u',{player:[C('K'),C('9')],dealer:[C('10'),C('7')],deck:[C('5')]});
     const r=casino.hitBlackjack('g','u');assert.equal(r.finished,true);assert.equal(r.outcome,'loss');assert.equal(r.reason,'bust');assert.equal(profiles.get('u').coins,before-25);assert.equal(casino.getHand('g','u'),null);
   });
@@ -108,7 +109,7 @@ test('Blackjack: bust ne paie rien et supprime la main',()=>{
 
 test('Blackjack: abort rembourse une fois et retire la main',()=>{
   const {casino,profiles}=setup();run('casino-bj-abort',()=>{
-    const before=profiles.get('u').coins;casino.startBlackjack('g','u',40,{randomInt:(a)=>a});assert.equal(profiles.get('u').coins,before-40);
+    const before=profiles.get('u').coins;const start=casino.startBlackjack('g','u',40,{randomInt:keepDeck});assert.equal(start.finished,false);assert.equal(profiles.get('u').coins,before-40);
     const r=casino.abortBlackjack('g','u');assert.equal(r.ok,true);assert.equal(r.refunded,40);assert.equal(profiles.get('u').coins,before);
     assert.equal(casino.abortBlackjack('g','u').error,'not-found');assert.equal(profiles.get('u').coins,before);
   });
@@ -116,14 +117,14 @@ test('Blackjack: abort rembourse une fois et retire la main',()=>{
 
 test('Blackjack: même joueur peut avoir une main distincte dans deux chats',()=>{
   const {casino}=setup();run('casino-bj-chats',()=>{
-    assert.equal(casino.startBlackjack('g1','u',10,{randomInt:(a)=>a}).ok,true);
-    assert.equal(casino.startBlackjack('g2','u',10,{randomInt:(a)=>a}).ok,true);
+    assert.equal(casino.startBlackjack('g1','u',10,{randomInt:keepDeck}).finished,false);
+    assert.equal(casino.startBlackjack('g2','u',10,{randomInt:keepDeck}).finished,false);
     assert.ok(casino.getHand('g1','u'));assert.ok(casino.getHand('g2','u'));
   });
 });
 
 test('Blackjack: mains isolées entre sessions',()=>{
-  const {casino}=setup();run('casino-s1',()=>casino.startBlackjack('g','u',10,{randomInt:(a)=>a}));
+  const {casino}=setup();run('casino-s1',()=>{const r=casino.startBlackjack('g','u',10,{randomInt:keepDeck});assert.equal(r.finished,false);});
   run('casino-s2',()=>assert.equal(casino.getHand('g','u'),null));
   run('casino-s1',()=>assert.ok(casino.getHand('g','u')));
 });
