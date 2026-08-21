@@ -2,7 +2,7 @@
 
 const config = require('../../config');
 const styleManager = require('../../utils/styleManager');
-const { engine, mention } = require('../../utils/gameCenterEngine');
+const { engine } = require('../../utils/gameCenterEngine');
 
 const prefix=config.prefix||'.';
 const footer=()=>styleManager.getPhrases().footer();
@@ -20,7 +20,7 @@ function menuText(){
     `${prefix}games list    → 📋 Parties actives`,
     `${prefix}games stop [#id] → 🛑 Arrêter une partie`,
     '',
-    '💡 Quand plusieurs parties tournent, réponds avec *#ID* pour viser la bonne partie.'
+    '💡 Quand plusieurs parties peuvent comprendre la même réponse, ajoute *#ID* pour viser la bonne partie.'
   ].join('\n')+sep();
 }
 
@@ -32,6 +32,13 @@ function activeText(from){
 
 function refFrom(text=''){ return String(text).match(/#([a-z0-9_-]{2,32})/i)?.[1]||null; }
 function stripRef(text=''){ return String(text).replace(/#[a-z0-9_-]{2,32}/ig,'').trim(); }
+function candidateTypes(rows,input){
+  const n=String(input||'').trim().toLowerCase(); const set=new Set();
+  if(rows.some(g=>g.type==='prefer')&&/^(1|2|a|b|gauche|droite)$/i.test(n))set.add('prefer');
+  if(rows.some(g=>g.type==='guess-number')&&/^-?\d+$/.test(n))set.add('guess-number');
+  if(rows.some(g=>g.type==='word-chain')&&/^[a-zA-ZÀ-ÿ-]{2,}$/.test(n))set.add('word-chain');
+  return [...set];
+}
 
 async function handleIncomingGameMessage(sock,msg,extra={}){
   const from=extra.from||msg.key.remoteJid;
@@ -41,11 +48,23 @@ async function handleIncomingGameMessage(sock,msg,extra={}){
   if(!body||body.startsWith(prefix))return false;
   const ref=refFrom(body), cleaned=stripRef(body);
 
-  // Ni Oui Ni Non doit observer les messages naturels, mais uniquement si une partie existe.
+  // Ni Oui Ni Non observe le langage naturel indépendamment des autres jeux.
   const nyn=engine.inspectNoYesNo(from,sender,cleaned,ref);
   if(nyn.handled&&nyn.eliminated){
     await sock.sendMessage(from,{text:`🚫 ${tag(sender)} a dit *${nyn.word.toUpperCase()}* !\n💥 Éliminé(e) de la partie #${nyn.game.alias}.${sep()}`,mentions:[sender]},{quoted:msg});
     return true;
+  }
+
+  // Si une réponse peut appartenir à plusieurs parties actives, on refuse de deviner.
+  // L'utilisateur choisit explicitement avec #ID : aucune partie ne vole la réponse d'une autre.
+  if(!ref){
+    const interactive=engine.list(from).filter(g=>g.type!=='no-yes-no');
+    const candidates=candidateTypes(interactive,cleaned);
+    if(candidates.length>1){
+      const ids=interactive.filter(g=>candidates.includes(g.type)).map(g=>`#${g.alias} (${g.type})`).join(' • ');
+      await sock.sendMessage(from,{text:`🎮 *Réponse ambiguë*\nCette réponse peut aller à plusieurs parties : ${ids}\n\nRenvoie-la avec l’ID, ex. *${cleaned} #abcdef*.${sep()}`},{quoted:msg});
+      return true;
+    }
   }
 
   const prefer=engine.votePrefer(from,sender,cleaned,ref);
@@ -113,5 +132,6 @@ module.exports={
     return extra.reply(menuText());
   },
   handleIncomingGameMessage,
-  engine
+  engine,
+  candidateTypes
 };
