@@ -51,7 +51,7 @@ jobs:
           npm run audit:silent-responses
 
   full-suite:
-    name: Clean full existing test suite
+    name: Candidate full existing test suite
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -71,7 +71,24 @@ jobs:
           node --check utils/gameCenterWhatsappBlock2.js
           node --check commands/games_entertainment/gamecenter.js
           node --check commands/games_entertainment/rpspick.js
-      - name: Full existing test suite on clean checkout
+      - name: Full existing test suite on candidate
+        run: node --test --test-force-exit tests/
+
+  stable-control:
+    name: Stable main full-suite control
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install stable production dependencies
+        run: npm install --omit=dev --no-audit --no-fund
+      - name: Full existing test suite on untouched main
         run: node --test --test-force-exit tests/
 
   render-sim:
