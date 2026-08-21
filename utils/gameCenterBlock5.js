@@ -79,9 +79,14 @@ if(typeof GameCenterEngine.prototype.startSecretFriend!=='function'){
     return {...state,secretPlan:plan.pairs};
   };
 
-  GameCenterEngine.prototype.finishSecretFriend=function(chatId,ref,{sent=0,failed=0}={}){
+  GameCenterEngine.prototype.finishSecretFriend=function(chatId,ref,{sent=0,failed=0,cancelled=false}={}){
     const g=this.get(chatId,ref,'secret-friend'); if(!g)return null;
-    const state=live(this,g); state.status='finished'; state.finishedAt=Date.now(); state.delivery={sent:Number(sent)||0,failed:Number(failed)||0}; this._put(state);
+    const state=live(this,g),isCancelled=Boolean(cancelled||Number(failed)>0);
+    state.status=isCancelled?'cancelled':'finished';
+    state.finishedAt=Date.now();
+    if(isCancelled)state.cancelledAt=state.finishedAt;
+    state.delivery={sent:Number(sent)||0,failed:Number(failed)||0};
+    this._put(state);
     return clone(state);
   };
 }
