@@ -47,6 +47,27 @@ test('devine le nombre: bornes, indices, victoire',()=>{
   run('number',()=>{ const g=e.startGuessNumber('g@g.us','a',{min:10,max:20}); const live=e.get('g@g.us',g.alias,'guess-number'); assert.equal(e.guessNumber('g@g.us','u','9',g.alias).reason,'range'); const target=live.target; if(target>10) assert.equal(e.guessNumber('g@g.us','u',String(target-1),g.alias).hint,'higher'); const win=e.guessNumber('g@g.us','u',String(target),g.alias); assert.equal(win.won,true); assert.equal(e.get('g@g.us',g.alias,'guess-number'),null); });
 });
 
+test('morpion: tours, case occupée et victoire',()=>{
+  const e=new GameCenterEngine({root:temp()});
+  run('ttt',()=>{
+    const g=e.startTicTacToe('g@g.us','x@s.whatsapp.net','o@s.whatsapp.net');
+    assert.equal(e.playTicTacToe('g@g.us','o@s.whatsapp.net','1',g.alias).reason,'turn');
+    assert.equal(e.playTicTacToe('g@g.us','x@s.whatsapp.net','1',g.alias).ok,true);
+    assert.equal(e.playTicTacToe('g@g.us','o@s.whatsapp.net','1',g.alias).reason,'occupied');
+    e.playTicTacToe('g@g.us','o@s.whatsapp.net','4',g.alias);
+    e.playTicTacToe('g@g.us','x@s.whatsapp.net','2',g.alias);
+    e.playTicTacToe('g@g.us','o@s.whatsapp.net','5',g.alias);
+    const win=e.playTicTacToe('g@g.us','x@s.whatsapp.net','3',g.alias);
+    assert.equal(win.won,true); assert.equal(win.game.winner,'x@s.whatsapp.net');
+    assert.equal(e.get('g@g.us',g.alias,'tic-tac-toe'),null);
+  });
+});
+
+test('morpion refuse adversaire absent ou soi-même',()=>{
+  const e=new GameCenterEngine({root:temp()});
+  run('ttt-guard',()=>{ assert.equal(e.startTicTacToe('g@g.us','x','x').error,'opponent'); assert.equal(e.startTicTacToe('g@g.us','x',null).error,'opponent'); });
+});
+
 test('anti-spam: une seule partie active de chaque type par groupe',()=>{
   const e=new GameCenterEngine({root:temp()});
   run('guard',()=>{ assert.ok(!e.startPrefer('g@g.us','u').error); assert.equal(e.startPrefer('g@g.us','u').error,'duplicate'); assert.ok(!e.startChain('g@g.us','u').error); assert.equal(e.startChain('g@g.us','u').error,'duplicate'); });
