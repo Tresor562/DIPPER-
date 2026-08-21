@@ -36,9 +36,14 @@ jobs:
           node --check utils/gameCenterWhatsappBlock5.js
           node --check utils/gameCenterBlock6.js
           node --check utils/gameCenterWhatsappBlock6.js
+          node --check utils/gameCenterProfiles.js
+          node --check utils/gameCenterWhatsappBlock7.js
           node --check commands/games_entertainment/gamecenter.js
           node --check commands/games_entertainment/rpspick.js
           node --check commands/games_entertainment/anon.js
+          node --check commands/games_entertainment/gameprofile.js
+          node --check commands/games_entertainment/gametop.js
+          node --check commands/games_entertainment/fish.js
           node --check scripts/install-game-center.js
           node scripts/install-game-center.js
           node scripts/install-game-center.js
@@ -86,9 +91,14 @@ jobs:
           node --check utils/gameCenterWhatsappBlock5.js
           node --check utils/gameCenterBlock6.js
           node --check utils/gameCenterWhatsappBlock6.js
+          node --check utils/gameCenterProfiles.js
+          node --check utils/gameCenterWhatsappBlock7.js
           node --check commands/games_entertainment/gamecenter.js
           node --check commands/games_entertainment/rpspick.js
           node --check commands/games_entertainment/anon.js
+          node --check commands/games_entertainment/gameprofile.js
+          node --check commands/games_entertainment/gametop.js
+          node --check commands/games_entertainment/fish.js
       - name: Full existing test suite on candidate
         run: node --test --test-force-exit tests/
 
@@ -146,7 +156,12 @@ jobs:
           node --check utils/gameCenterWhatsappBlock5.js
           node --check utils/gameCenterBlock6.js
           node --check utils/gameCenterWhatsappBlock6.js
+          node --check utils/gameCenterProfiles.js
+          node --check utils/gameCenterWhatsappBlock7.js
           node --check commands/games_entertainment/anon.js
+          node --check commands/games_entertainment/gameprofile.js
+          node --check commands/games_entertainment/gametop.js
+          node --check commands/games_entertainment/fish.js
       - name: 100000 style and menu simulations
         run: npm run test:style-menu
       - name: Render static simulator
