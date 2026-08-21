@@ -6,7 +6,7 @@ const fs=require('fs');
 const os=require('os');
 const path=require('path');
 const sessionContext=require('../utils/sessionContext');
-const {GameCenterEngine,MAX_ACTIVE_PER_GROUP}=require('../utils/gameCenterEngine');
+const {GameCenterEngine}=require('../utils/gameCenterEngine');
 
 function temp(){ return fs.mkdtempSync(path.join(os.tmpdir(),'dipper-game-center-')); }
 function run(sid,fn){ return sessionContext.run(sid,fn); }
@@ -39,7 +39,7 @@ test('mot en chaîne applique lettre et unicité',()=>{
 
 test('ni oui ni non ignore sous-chaînes et élimine mots entiers',()=>{
   const e=new GameCenterEngine({root:temp()});
-  run('nyn',()=>{ const g=e.startNoYesNo('g@g.us','a'); assert.equal(e.inspectNoYesNo('g@g.us','u','nouille',g.alias).handled,false); const r=e.inspectNoYesNo('g@g.us','u','je dis OUI !',g.alias); assert.equal(r.eliminated,true); assert.equal(r.word,'oui'); assert.equal(e.inspectNoYesNo('g@g.us','u','non',g.alias).handled,false); });
+  run('nyn',()=>{ e.startNoYesNo('g@g.us','a'); assert.equal(e.inspectNoYesNo('g@g.us','u','nouille').handled,false); const r=e.inspectNoYesNo('g@g.us','u','je dis OUI !'); assert.equal(r.eliminated,true); assert.equal(r.word,'oui'); assert.equal(e.inspectNoYesNo('g@g.us','u','non').handled,false); });
 });
 
 test('devine le nombre: bornes, indices, victoire',()=>{
@@ -47,9 +47,9 @@ test('devine le nombre: bornes, indices, victoire',()=>{
   run('number',()=>{ const g=e.startGuessNumber('g@g.us','a',{min:10,max:20}); const live=e.get('g@g.us',g.alias,'guess-number'); assert.equal(e.guessNumber('g@g.us','u','9',g.alias).reason,'range'); const target=live.target; if(target>10) assert.equal(e.guessNumber('g@g.us','u',String(target-1),g.alias).hint,'higher'); const win=e.guessNumber('g@g.us','u',String(target),g.alias); assert.equal(win.won,true); assert.equal(e.get('g@g.us',g.alias,'guess-number'),null); });
 });
 
-test('limite anti-spam des parties simultanées',()=>{
+test('anti-spam: une seule partie active de chaque type par groupe',()=>{
   const e=new GameCenterEngine({root:temp()});
-  run('limit',()=>{ for(let i=0;i<MAX_ACTIVE_PER_GROUP;i++) assert.ok(!e.startPrefer('g@g.us','u').error); assert.equal(e.startPrefer('g@g.us','u').error,'limit'); });
+  run('guard',()=>{ assert.ok(!e.startPrefer('g@g.us','u').error); assert.equal(e.startPrefer('g@g.us','u').error,'duplicate'); assert.ok(!e.startChain('g@g.us','u').error); assert.equal(e.startChain('g@g.us','u').error,'duplicate'); });
 });
 
 test('stress déterministe: 10 000 opérations réparties entre groupes/sessions',()=>{
