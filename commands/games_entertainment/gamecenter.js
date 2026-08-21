@@ -4,7 +4,7 @@ const config = require('../../config');
 const styleManager = require('../../utils/styleManager');
 const { engine } = require('../../utils/gameCenterEngine');
 require('../../utils/gameCenterBlock2');
-const advanced = require('./gamecenterBlock2');
+const advanced = require('../../utils/gameCenterWhatsappBlock2');
 
 const prefix=config.prefix||'.';
 const footer=()=>styleManager.getPhrases().footer();
