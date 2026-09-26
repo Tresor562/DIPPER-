@@ -45,7 +45,6 @@ const {
   DisconnectReason,
   Browsers,
   fetchLatestBaileysVersion,
-  fetchLatestWaWebVersion,
   proto,
 } = require('@whiskeysockets/baileys');
 const pino   = require('pino');
@@ -73,40 +72,14 @@ function logCriticalSessionError(message) {
 // sessionId → { sock, sessionId, phoneNumber, timers: {}, processedMessages: Map }
 const activeSessions = new Map();
 
-// ── Version WhatsApp Web utilisée par Baileys ─────────────────────────────
-// IMPORTANT : fetchLatestBaileysVersion() peut prendre du retard sur la vraie
-// révision attendue par WhatsApp. Dans ce cas, le code d'appairage est généré
-// correctement mais l'application mobile affiche "Couldn't link device".
-// On préfère donc la révision publiée directement par web.whatsapp.com.
+// ── Version Baileys (chargée une seule fois) ──────────────────────────────
 let _baileysVersion = null;
-let _baileysVersionFetchedAt = 0;
-const BAILEYS_VERSION_TTL_MS = 6 * 60 * 60 * 1000;
-
 async function getBaileysVersion() {
-  const now = Date.now();
-  if (_baileysVersion && (now - _baileysVersionFetchedAt) < BAILEYS_VERSION_TTL_MS) {
-    return _baileysVersion;
-  }
-
-  try {
-    const latest = await fetchLatestWaWebVersion({});
-    if (latest?.isLatest && Array.isArray(latest.version) && latest.version.length === 3) {
-      _baileysVersion = latest.version;
-      _baileysVersionFetchedAt = now;
-      console.log('[SessionManager] WhatsApp Web version actuelle : ' + _baileysVersion.join('.'));
-      return _baileysVersion;
-    }
-    throw latest?.error || new Error('Révision WhatsApp Web actuelle indisponible');
-  } catch (err) {
+  if (!_baileysVersion) {
     const { version } = await fetchLatestBaileysVersion();
     _baileysVersion = version;
-    _baileysVersionFetchedAt = now;
-    logCriticalSessionError(
-      '⚠️ Impossible de récupérer la version WhatsApp Web actuelle (' + (err?.message || err) + '). ' +
-      'Fallback Baileys : ' + _baileysVersion.join('.')
-    );
-    return _baileysVersion;
   }
+  return _baileysVersion;
 }
 
 // ── Store messages par session ─────────────────────────────────────────────
