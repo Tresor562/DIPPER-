@@ -96,6 +96,16 @@ async function waitForSessionOnline(phoneNumber, timeoutMs = RECONNECT_GRACE_MS)
   while (Date.now() < deadline) {
     const current = sessionManager.getSession(phoneNumber);
     if (current?.isOnline) return true;
+
+    const lastDisconnect =
+      typeof sessionManager.getLastDisconnect === 'function'
+        ? sessionManager.getLastDisconnect(phoneNumber)
+        : current?.lastDisconnect || null;
+
+    if (['logged_out', 'bad_session', 'connection_replaced'].includes(lastDisconnect?.category)) {
+      return false;
+    }
+
     await sleep(RECONNECT_POLL_MS);
   }
   return !!sessionManager.getSession(phoneNumber)?.isOnline;
