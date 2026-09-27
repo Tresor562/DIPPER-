@@ -57,15 +57,30 @@ module.exports = {
 
       const totalRequests = pendingList.length;
 
-      // On extrait tous les JID de la liste d'attente
-      const jidsToApprove = pendingList.map(request => request.jid);
+      // Approbation séquentielle : une requête à la fois pour éviter les
+      // rafales d'actions administratives.
+      const APPROVE_PAUSE_MS = 3000;
+      let approved = 0;
+      let failed = 0;
 
-      // Approbation en masse d'un seul coup
-      await sock.groupRequestParticipantsUpdate(chatId, jidsToApprove, 'approve');
+      for (let i = 0; i < pendingList.length; i++) {
+        const jid = pendingList[i]?.jid;
+        if (!jid) continue;
+        try {
+          await sock.groupRequestParticipantsUpdate(chatId, [jid], 'approve');
+          approved++;
+        } catch (err) {
+          failed++;
+          console.warn(`[approveall] échec ${jid}: ${err?.message || err}`);
+        }
+        if (i + 1 < pendingList.length) {
+          await new Promise(resolve => setTimeout(resolve, APPROVE_PAUSE_MS));
+        }
+      }
 
       // Succès
       await sock.sendMessage(chatId, {
-        text: `📈 *${totalRequests} ᴀ̂ᴍᴇs ᴏɴᴛ ᴇ́ᴛᴇ́ ᴀᴘᴘʀᴏᴜᴠᴇ́ᴇs ᴇᴛ ɪɴᴛᴇ́ɢʀᴇ́ᴇs ᴀᴜ sᴀɴᴄᴛᴜᴀɪʀᴇ !*\n\n${extra.phrases.footer()}`,
+        text: `📈 *${approved}/${totalRequests} ᴀ̂ᴍᴇs ᴏɴᴛ ᴇ́ᴛᴇ́ ᴀᴘᴘʀᴏᴜᴠᴇ́ᴇs.*${failed ? `\n⚠️ ${failed} échec(s).` : ''}\n\n${extra.phrases.footer()}`,
       }, { quoted: msg });
 
     } catch (error) {
