@@ -191,12 +191,8 @@
   <!-- Toast notifications (errors) -->
   <div class="toast-stack" id="toast-stack" aria-live="assertive"></div>
 
-  <!-- Site fusionné avec l'API WhatsApp (même serveur, même origine) — voir
-       api/staticFiles.js. window.DIPPER_API_BASE_URL reste volontairement
-       absent : app.js retombe alors sur une URL relative ('/pair'), qui
-       pointe automatiquement sur ce même serveur. Aucune config d'URL
-       externe n'est donc nécessaire ici, contrairement à un déploiement
-       séparé (ex: Vercel) où cette ligne redevient obligatoire. -->
+  <!-- Pairing intégré : cette page et POST /pair sont servis par le même
+       processus DIPPER. Aucun site web externe n'est requis. -->
 
   <!-- intl-tel-input: professional country selector + phone validation (see README) -->
   <script src="https://cdn.jsdelivr.net/npm/intl-tel-input@29.1.2/dist/js/intlTelInput.min.js"></script>
