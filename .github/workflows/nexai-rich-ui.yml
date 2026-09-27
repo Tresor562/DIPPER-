@@ -1,0 +1,46 @@
+name: NexAI WhatsApp rich UI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'handler.js'
+      - 'utils/nexaiInteractive.js'
+      - 'utils/nexaiRichUi.js'
+      - 'commands/general_tools/nexui.js'
+      - 'commands/games_entertainment/nexai_arcade.js'
+      - 'commands/social_media_download/tiktok.js'
+      - 'tests/nexai-interactive.test.js'
+      - 'tests/nexai-rich-ui.test.js'
+      - '.github/workflows/nexai-rich-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rich-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install production dependencies
+        run: npm install --omit=dev --ignore-scripts --no-audit --no-fund
+      - name: Syntax-check rich UI integration
+        run: |
+          node --check handler.js
+          node --check utils/nexaiInteractive.js
+          node --check utils/nexaiRichUi.js
+          node --check commands/general_tools/nexui.js
+          node --check commands/games_entertainment/nexai_arcade.js
+          node --check commands/social_media_download/tiktok.js
+      - name: Run rich UI regression tests
+        run: node --test tests/nexai-interactive.test.js tests/nexai-rich-ui.test.js
+      - name: Validate command registry
+        run: node scripts/validate-commands.js
