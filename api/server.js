@@ -92,6 +92,8 @@ const ERROR_STATUS = {
   NO_MONGODB: 503,
   DB_UNAVAILABLE: 503,
   CODE_FAILED: 502,
+  SESSION_REPLACED: 409,
+  RECONNECT_PENDING: 409,
 };
 
 function sendJSON(res, status, obj) {
