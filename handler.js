@@ -2168,26 +2168,6 @@ const handleAntigroupmention = async (sock, msg, groupMetadata) => {
 };
 
 // ==========================================
-// ANTI-CALL
-// ==========================================
-const initializeAntiCall = (sock) => {
-  sock.ev.on('call', async (calls) => {
-    try {
-      if (!config.defaultGroupSettings?.anticall) return;
-      for (const call of calls) {
-        if (call.status === 'offer') {
-          await sock.rejectCall(call.id, call.from);
-          await sock.updateBlockStatus(call.from, 'block');
-          await sock.sendMessage(call.from, {
-            text: `𝐃𝐈𝐏𝐏𝐄𝐑  ɴᴇ ʀᴇ́ᴘᴏɴᴅ ǫᴜ'ᴀᴜx ᴍᴇssᴀɢᴇs ᴇ́ᴄʀɪᴛs.`
-          });
-        }
-      }
-    } catch (_) {}
-  });
-};
-
-// ==========================================
 // ANTI STATUS MENTION HANDLER [FIX] — Manquant dans le handler d'origine
 // Détecte les messages qui contiennent une contextInfo avec statusMentionedJid
 // ou des mentions via les statuts WhatsApp
@@ -2248,7 +2228,6 @@ module.exports = {
   handleAntilink,
   handleAntigroupmention,
   handleAntistatusmention, // [FIX] ajouté
-  initializeAntiCall,
   isSupremeOwner,
   isOwner,
   isAnyOwner,
