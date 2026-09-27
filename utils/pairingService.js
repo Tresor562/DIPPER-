@@ -186,7 +186,7 @@ async function resetDisconnectedRegisteredSession(db, cleanNumber, meta) {
  *   reconnectée avec succès, aucun nouveau code à saisir).
  * @throws {PairingError} codes possibles :
  *   INVALID_NUMBER, COOLDOWN, ALREADY_ACTIVE, NO_MONGODB, CODE_FAILED,
- *   SESSION_REPLACED, RECONNECT_PENDING
+ *   SESSION_REPLACED, RECONNECT_PENDING, PAIRING_IN_PROGRESS
  */
 async function createPairingSession(phoneNumber, options = {}) {
   if (!process.env.MONGODB_URI) {
@@ -213,11 +213,17 @@ async function createPairingSession(phoneNumber, options = {}) {
 
   const sessionId = sessionManager.toSessionId(cleanNumber);
 
-  // ── Anti-doublon : une session déjà EN LIGNE pour ce numéro ne doit pas
-  // être recréée par-dessus (perdrait la connexion active pour rien).
+  // ── Anti-doublon / anti-remplacement : ne jamais recréer un socket
+  // déjà actif ou en cours de pairing/reconnexion.
   const existing = sessionManager.getSession(cleanNumber);
   if (existing?.isOnline) {
     throw new PairingError('ALREADY_ACTIVE', `Une session est déjà active pour +${cleanNumber}.`);
+  }
+  if (existing && !existing.isRegistered) {
+    throw new PairingError(
+      'PAIRING_IN_PROGRESS',
+      `Un pairing est déjà en cours pour +${cleanNumber}. La session existante n’a pas été remplacée.`
+    );
   }
 
   let db;
@@ -235,11 +241,56 @@ async function createPairingSession(phoneNumber, options = {}) {
     throw new PairingError('DB_UNAVAILABLE', `Connexion à la base de données impossible : ${err.message}`);
   }
 
-  let session;
-  try {
-    session = await sessionManager.startSession(db, cleanNumber, { isPairing: true, owner, origin });
-  } catch (err) {
-    throw new PairingError('CODE_FAILED', `Échec de création de la session : ${err.message}`);
+  let session = existing || null;
+
+  // Si une session enregistrée existe déjà en mémoire, ne pas la remplacer :
+  // lui laisser sa fenêtre de reconnexion avant toute décision de re-pair.
+  if (session?.isRegistered) {
+    const isReallyOnline = await waitForSessionOnline(cleanNumber);
+    if (isReallyOnline) {
+      return { sessionId, pairingCode: null, reconnected: true };
+    }
+
+    const lastDisconnect =
+      (typeof sessionManager.getLastDisconnect === 'function'
+        ? sessionManager.getLastDisconnect(cleanNumber)
+        : null) ||
+      session?.lastDisconnect ||
+      null;
+
+    const category = lastDisconnect?.category || 'unknown';
+    const detail = lastDisconnect?.message || 'aucune raison fournie par WhatsApp';
+
+    if (category === 'connection_replaced') {
+      throw new PairingError(
+        'SESSION_REPLACED',
+        `La session a été remplacée par une autre connexion. Aucun credential n’a été supprimé. Détail : ${detail}`
+      );
+    }
+
+    if (category !== 'logged_out' && category !== 'bad_session') {
+      throw new PairingError(
+        'RECONNECT_PENDING',
+        `La session enregistrée tente encore de se reconnecter. Aucun socket ni credential n’a été remplacé. Dernière raison : ${detail}`
+      );
+    }
+
+    try {
+      session = await resetDisconnectedRegisteredSession(db, cleanNumber, { owner, origin });
+    } catch (err) {
+      throw new PairingError('CODE_FAILED', `Échec de réinitialisation de la session : ${err.message}`);
+    }
+  }
+
+  // Aucun socket existant : démarrer une session candidate. Si des
+  // credentials persistants existent, le bloc de reconnexion ci-dessous
+  // décidera ensuite s'ils sont encore valides.
+  if (!session) {
+    try {
+      session = await sessionManager.startSession(db, cleanNumber, { isPairing: true, owner, origin });
+    } catch (err) {
+      throw new PairingError('CODE_FAILED', `Échec de création de la session : ${err.message}`);
+    }
   }
 
   // ── Reconnexion réelle : `registered` signifie seulement que des creds
