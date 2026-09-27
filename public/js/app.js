@@ -9,25 +9,16 @@
  * le résultat. Toute décision (numéro valide, anti-doublon, cooldown,
  * reconnexion...) reste côté serveur, dans pairingService.js.
  *
- * Ce projet est maintenant indépendant du projet WhatsApp et du bot
- * Telegram — voir README.md.
- *
- * CONFIGURATION DE L'API :
- *   Par défaut, les requêtes partent en relatif ("/pair") — ça marche
- *   sans rien configurer si ce site est servi depuis la même origine
- *   que l'API (même domaine, ou un reverse-proxy qui route /pair vers
- *   le backend). Si l'API est ailleurs, définir avant ce script :
- *     <script>window.DIPPER_API_BASE_URL = 'https://api.mondomaine.com';</script>
+ * Le site de pairing fait partie de DIPPER lui-même : api/server.js sert
+ * public/ et expose POST /pair dans le MÊME processus Node.
+ * Le navigateur utilise donc uniquement une route relative same-origin.
+ * Aucun site Vercel, aucune URL d'API distante et aucune configuration
+ * frontend supplémentaire ne sont nécessaires.
  */
 (function () {
   'use strict';
 
-  var API_BASE_URL = window.DIPPER_API_BASE_URL || '';
-  if (!API_BASE_URL) {
-    console.warn('[DIPPER] window.DIPPER_API_BASE_URL is not set — /pair requests will go to this site\u2019s own origin. ' +
-      'If your bot API runs on a different domain (the usual setup when this site is deployed separately, e.g. on Vercel), ' +
-      'every pairing request will fail. See README \u2192 "Configuring the API address".');
-  }
+  var PAIR_ENDPOINT = '/pair';
 
   // ── Friendly error messages (jamais de JSON brut affiché) ───────────
   var ERROR_MESSAGES = {
@@ -39,12 +30,7 @@
     DB_UNAVAILABLE: 'Pairing is temporarily unavailable. Please try again shortly.',
     CODE_FAILED: 'We couldn\u2019t generate a code right now. Please try again.',
     BAD_REQUEST: 'Something about that request didn\u2019t go through. Please try again.',
-    // [Audit chantier "Something went wrong"] Cas distinct et beaucoup plus
-    // actionnable que INTERNAL_ERROR : la réponse reçue n'était pas du JSON
-    // valide (typiquement une page 404 HTML) — signe quasi certain que la
-    // requête n'a jamais atteint la vraie API (DIPPER_API_BASE_URL absent
-    // ou incorrect, site et API sur des domaines différents). Voir README.
-    BAD_RESPONSE: 'Can\u2019t reach the pairing service at this address. If you just deployed this site, make sure DIPPER_API_BASE_URL points to your bot\u2019s API (see README).',
+    BAD_RESPONSE: 'The DIPPER server did not return a valid pairing response. Check that the bot process is running and that /pair is reachable on this server.',
     INTERNAL_ERROR: 'Something went wrong on our end. Please try again.',
     NETWORK: 'Can\u2019t reach the server. Check your connection and try again.',
   };
@@ -241,10 +227,10 @@
   function submitPairingRequest(phoneNumber) {
     setLoading(true);
 
-    fetch(API_BASE_URL + '/pair', {
+    fetch(PAIR_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumber: phoneNumber }),
+      body: JSON.stringify({ phoneNumber: phoneNumber, origin: 'web' }),
     })
       .then(function (res) {
         return res.json().then(function (data) {
