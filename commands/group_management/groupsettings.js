@@ -261,7 +261,7 @@ module.exports = [
   // ─────────────────────────────────────────────────────────────────────────
   {
     name: 'setgroupname',
-    aliases: ['groupname', 'setnom', 'renamegroup'],
+    aliases: ['setnom', 'renamegroup'],
     category: '⚙️ Gestion de groupe',
     description: '『 𝐃𝐈𝐏𝐏𝐄𝐑 』➪ ᴄʜᴀɴɢᴇ ʟᴇ ɴᴏᴍ ᴅᴜ ɢʀᴏᴜᴘᴇ',
     usage: `${prefix}setgroupname Nouveau Nom`,
