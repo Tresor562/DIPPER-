@@ -94,6 +94,7 @@ const ERROR_STATUS = {
   CODE_FAILED: 502,
   SESSION_REPLACED: 409,
   RECONNECT_PENDING: 409,
+  PAIRING_IN_PROGRESS: 409,
 };
 
 function sendJSON(res, status, obj) {
