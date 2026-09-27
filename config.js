@@ -59,7 +59,6 @@ module.exports = {
       antiall: false,
       antiviewonce: false,
       antibot: false,
-      anticall: process.env.ANTICALL === 'true',
       antigroupmention: false,
       antigroupmentionAction: 'delete',
 
