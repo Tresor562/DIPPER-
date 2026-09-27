@@ -60,6 +60,30 @@ setInterval(() => {
 const warnTracker   = {}; // { groupId: { jid: warnCount } }
 const blockedJids   = {}; // { groupId: Set<jid> }
 
+// File d'actions administratives par groupe : une expulsion à la fois,
+// avec une pause fixe pour éviter les rafales lorsque plusieurs violations
+// arrivent simultanément.
+const enforcementQueues = new Map();
+const ENFORCEMENT_PAUSE_MS = 3000;
+
+function enqueueRemoval(sock, groupId, jid) {
+  const key = sessionContext.scopeKey(groupId);
+  const previous = enforcementQueues.get(key) || Promise.resolve();
+
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      await sock.groupParticipantsUpdate(groupId, [jid], 'remove');
+      await new Promise(resolve => setTimeout(resolve, ENFORCEMENT_PAUSE_MS));
+    })
+    .finally(() => {
+      if (enforcementQueues.get(key) === next) enforcementQueues.delete(key);
+    });
+
+  enforcementQueues.set(key, next);
+  return next;
+}
+
 // Paramètres par défaut
 const FLOOD_SEUIL   = 7;   // 7 messages
 const FLOOD_FENETRE = 5;   // en 5 secondes
@@ -227,7 +251,7 @@ async function gererViolation(sock, groupId, senderJid, numero, raison) {
       });
     } catch (_) {}
     try {
-      await sock.groupParticipantsUpdate(groupId, [senderJid], 'remove');
+      await enqueueRemoval(sock, groupId, senderJid);
     } catch (_) {}
   } else {
     // ── AVERTISSEMENT ──
