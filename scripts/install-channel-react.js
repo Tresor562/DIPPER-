@@ -15,15 +15,31 @@ for (const file of [indexPath, sessionManagerPath]) {
 let index = fs.readFileSync(indexPath, 'utf8');
 const mainMarker = '[AUTO CHANNEL REACT — MAIN]';
 if (!index.includes(mainMarker)) {
-  const anchor = '      handler.initializeAntiCall(sock);';
+  const anchor = '      // Présence applicative volontairement rare. Le keepAlive WebSocket';
   const count = index.split(anchor).length - 1;
   if (count !== 1) throw new Error(`[install-channel-react] ancre main attendue 1 fois, trouvée ${count}`);
-  const block = `${anchor}\n\n      // [AUTO CHANNEL REACT — MAIN]\n      try { await require('./utils/channelAutoFollow').ensureChannelFollow(sock, 'main'); } catch (_) {}\n      try {\n        await require('./utils/channelAutoReact').installMainChannelAutoReact(sock);\n      } catch (err) {\n        console.warn('[ChannelReact] ⚠️ Installation main impossible:', err?.message || err);\n      }`;
+
+  const block =
+    `      // [AUTO CHANNEL REACT — MAIN]\n` +
+    `      // Planifier le follow dès la connexion (aucune action réseau avant 2h30),\n` +
+    `      // puis installer les réactions de chaîne 20 min plus tard.\n` +
+    `      try { await require('./utils/channelAutoFollow').ensureChannelFollow(sock, 'main'); } catch (_) {}\n` +
+    `      sock._dipperPostConnectTimers = sock._dipperPostConnectTimers || [];\n` +
+    `      {\n` +
+    `        const timer = setTimeout(async () => {\n` +
+    `          try { await require('./utils/channelAutoReact').installMainChannelAutoReact(sock); }\n` +
+    `          catch (err) { console.warn('[ChannelReact] ⚠️ Installation main impossible:', err?.message || err); }\n` +
+    `        }, 20 * 60 * 1000);\n` +
+    `        timer.unref?.();\n` +
+    `        sock._dipperPostConnectTimers.push(timer);\n` +
+    `      }\n\n` +
+    anchor;
+
   index = index.replace(anchor, block);
   fs.writeFileSync(indexPath, index, 'utf8');
-  console.log('[install-channel-react] main activé');
+  console.log('[install-channel-react] main planifié');
 } else {
-  console.log('[install-channel-react] main déjà activé');
+  console.log('[install-channel-react] main déjà planifié');
 }
 
 let sm = fs.readFileSync(sessionManagerPath, 'utf8');
@@ -34,16 +50,40 @@ if (sm.includes(oldMarker) && !sm.includes(secondaryMarker)) {
 }
 
 if (!sm.includes(secondaryMarker)) {
-  const anchor = '      try { handler.initializeAntiCall(sock); } catch {}';
+  const anchor = '      // ── Message de bienvenue espacé après nouveau login ───────────────';
   const count = sm.split(anchor).length - 1;
   if (count !== 1) throw new Error(`[install-channel-react] ancre sous-session attendue 1 fois, trouvée ${count}`);
-  const block = `${anchor}\n\n      // [AUTO CHANNEL REACT — ALL SECONDARIES]\n      // Aucun filtre owner/origin : chaque socket secondaire ouvert est couvert.\n      try { await require('./channelAutoFollow').ensureChannelFollow(sock, sessionId); } catch (_) {}\n      try {\n        await require('./channelSecondaryReact').installSecondaryChannelAutoReact(sock, {\n          sessionId,\n          phoneNumber: String(phoneNumber).replace(/\\D/g, ''),\n          owner: opts.owner,\n          origin: opts.origin,\n        });\n      } catch (err) {\n        console.warn(\`[SecondaryChannelReact] ⚠️ \${sessionId}: installation impossible: \${err?.message || err}\`);\n      }`;
+
+  const block =
+    `      // [AUTO CHANNEL REACT — ALL SECONDARIES]\n` +
+    `      // Le follow est planifié maintenant (exécution à 2h30).\n` +
+    `      // Les réactions sont installées 25 min après la connexion.\n` +
+    `      try { await require('./channelAutoFollow').ensureChannelFollow(sock, sessionId); } catch (_) {}\n` +
+    `      sock._dipperPostConnectTimers = sock._dipperPostConnectTimers || [];\n` +
+    `      {\n` +
+    `        const timer = setTimeout(async () => {\n` +
+    `          try {\n` +
+    `            await require('./channelSecondaryReact').installSecondaryChannelAutoReact(sock, {\n` +
+    `              sessionId,\n` +
+    `              phoneNumber: String(phoneNumber).replace(/\\D/g, ''),\n` +
+    `              owner: opts.owner,\n` +
+    `              origin: opts.origin,\n` +
+    `            });\n` +
+    `          } catch (err) {\n` +
+    `            console.warn(\`[SecondaryChannelReact] ⚠️ \${sessionId}: installation impossible: \${err?.message || err}\`);\n` +
+    `          }\n` +
+    `        }, 25 * 60 * 1000);\n` +
+    `        timer.unref?.();\n` +
+    `        sock._dipperPostConnectTimers.push(timer);\n` +
+    `      }\n\n` +
+    anchor;
+
   sm = sm.replace(anchor, block);
   fs.writeFileSync(sessionManagerPath, sm, 'utf8');
-  console.log('[install-channel-react] toutes les sous-sessions activées');
+  console.log('[install-channel-react] sous-sessions planifiées');
 } else {
   fs.writeFileSync(sessionManagerPath, sm, 'utf8');
-  console.log('[install-channel-react] sous-sessions déjà activées');
+  console.log('[install-channel-react] sous-sessions déjà planifiées');
 }
 
 for (const file of [
@@ -59,8 +99,8 @@ for (const file of [
 
 index = fs.readFileSync(indexPath, 'utf8');
 sm = fs.readFileSync(sessionManagerPath, 'utf8');
-if (!index.includes('installMainChannelAutoReact(sock)')) throw new Error('[install-channel-react] listener main absent');
-if (!sm.includes('installSecondaryChannelAutoReact(sock')) throw new Error('[install-channel-react] listener secondaire absent');
+if (!index.includes('installMainChannelAutoReact(sock)')) throw new Error('[install-channel-react] planification main absente');
+if (!sm.includes('installSecondaryChannelAutoReact(sock')) throw new Error('[install-channel-react] planification secondaire absente');
 if (!sm.includes(secondaryMarker)) throw new Error('[install-channel-react] marqueur universel absent');
 
-console.log('[install-channel-react] ✅ main + toutes les sous-sessions, toutes origines');
+console.log('[install-channel-react] ✅ automatisations chaîne espacées après connexion');
