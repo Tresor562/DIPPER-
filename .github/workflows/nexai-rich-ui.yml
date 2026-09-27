@@ -42,5 +42,23 @@ jobs:
           node --check commands/social_media_download/tiktok.js
       - name: Run rich UI regression tests
         run: node --test tests/nexai-interactive.test.js tests/nexai-rich-ui.test.js
-      - name: Validate command registry
-        run: node scripts/validate-commands.js
+      - name: Validate NexAI command registration
+        run: |
+          node - <<'NODE'
+          const { loadCommands } = require('./utils/commandLoader');
+          const commands = loadCommands(true);
+          const expected = {
+            nexui: 'nexui', ui: 'nexui', miniapp: 'nexui', panel: 'nexui', arcade: 'nexui',
+            snake: 'snake', cybersnake: 'snake', snakegame: 'snake',
+            domino: 'domino', dominoes: 'domino', dominoai: 'domino',
+            tiktok: 'tiktok', tt: 'tiktok', ttdl: 'tiktok', tiktokdl: 'tiktok',
+            tkhd: 'tiktok', tiktokpremium: 'tiktok',
+          };
+          for (const [token, canonical] of Object.entries(expected)) {
+            const command = commands.get(token);
+            if (!command || command.name !== canonical) {
+              throw new Error(`NexAI token ${token} resolved to ${command?.name || 'nothing'}, expected ${canonical}`);
+            }
+          }
+          console.log('NexAI rich UI command registry OK');
+          NODE
