@@ -277,6 +277,10 @@ async function startBot() {
     }
   });
 
+  if (typeof handler.initializeSendPolicy === 'function') {
+    handler.initializeSendPolicy(sock);
+  }
+
   // ════════════════════════════════════════════
   // [SUPPRIMÉ — Phase 2, chantier Pairing/stabilisation]
   // L'ancien comportement générait automatiquement un code de pairing au
