@@ -2268,6 +2268,7 @@ const handleAntistatusmention = async (sock, msg, groupMetadata) => {
 // ==========================================
 module.exports = {
   handleMessage,
+  initializeSendPolicy: wrapSendMessage,
   handleGroupUpdate,
   handleAntilink,
   handleAntigroupmention,
