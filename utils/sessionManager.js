@@ -72,6 +72,32 @@ function logCriticalSessionError(message) {
 // sessionId → { sock, sessionId, phoneNumber, timers: {}, processedMessages: Map }
 const activeSessions = new Map();
 
+const FORCED_PRESENCE_INTERVAL_MS = 15 * 60 * 1000;
+const SESSION_WELCOME_DELAY_MS = 4 * 60 * 1000;
+
+function messageDedupKey(msg) {
+  return [
+    msg?.key?.remoteJid || '',
+    msg?.key?.participant || '',
+    msg?.key?.id || '',
+    msg?.key?.fromMe ? '1' : '0',
+  ].join('|');
+}
+
+function clearDeferredSocketTimers(sock) {
+  try {
+    if (sock?._dipperNewsletterFollowTimer) clearTimeout(sock._dipperNewsletterFollowTimer);
+    sock._dipperNewsletterFollowTimer = null;
+  } catch (_) {}
+  for (const key of ['_dipperMainChannelReactLiveTimers', '_dipperSecondaryChannelReactLiveTimers', '_dipperPostConnectTimers']) {
+    try {
+      const timers = sock?.[key];
+      if (Array.isArray(timers)) timers.forEach(t => clearTimeout(t));
+      sock[key] = [];
+    } catch (_) {}
+  }
+}
+
 // ── Version Baileys (chargée une seule fois) ──────────────────────────────
 let _baileysVersion = null;
 async function getBaileysVersion() {
@@ -186,13 +212,14 @@ async function startSession(db, phoneNumber, opts = {}) {
     sessionId,
     phoneNumber: String(phoneNumber).replace(/\D/g, ''),
     db,
-    timers: { heartbeat: null, monitor: null, ping: null, reconnect: null, storeCleanup, processedTimer },
+    timers: { heartbeat: null, monitor: null, ping: null, reconnect: null, welcome: null, storeCleanup, processedTimer },
     processedMessages,
     messageStore,
     reconnectAttempts,
     isOnline: false,
     isRegistered: !!state.creds.registered, // [PHASE 3] déjà appairé (reconnexion) vs nouvelle session
     isStopping: false,
+    lastDisconnect: null,
     createdAt: Date.now(), // [PHASE 4D] pour le nettoyage des sessions orphelines (voir startOrphanSessionSweep)
   };
   activeSessions.set(sessionId, session);
@@ -238,7 +265,15 @@ async function startSession(db, phoneNumber, opts = {}) {
       ].includes(statusCode);
       const shouldReconnect = !terminalDisconnect && !_isShuttingDown && !session.isStopping;
 
-      console.log(`[SessionManager] 🔌 ${sessionId} déconnecté — code=${statusCode} | reconnexion=${shouldReconnect}`);
+      session.lastDisconnect = {
+        statusCode: statusCode ?? null,
+        message: errorMessage,
+        terminal: terminalDisconnect,
+        at: new Date().toISOString(),
+      };
+      clearDeferredSocketTimers(sock);
+
+      console.log(`[SessionManager] 🔌 ${sessionId} déconnecté — code=${statusCode ?? '?'} | raison="${errorMessage}" | terminal=${terminalDisconnect} | reconnexion=${shouldReconnect}`);
       if (terminalDisconnect || /bad mac|session error|conflict|pair|auth/i.test(errorMessage)) {
         logCriticalSessionError(`❗ ${sessionId} fermeture critique — code=${statusCode ?? '?'} — ${errorMessage}`);
       }
@@ -274,7 +309,8 @@ async function startSession(db, phoneNumber, opts = {}) {
       session.isRegistered = true;
       reconnectAttempts = 0;
       session.reconnectAttempts = 0;
-      processedMessages.clear();
+      // Conserver l'historique anti-doublon : une reconnexion peut rejouer
+      // des messages récents et ne doit pas réexécuter leurs commandes.
       sessionIndex.setState(sessionId, { isOnline: true, isRegistered: true }).catch(() => {});
 
       const sId = sock.user?.id?.split(':')[0] || 'unknown';
@@ -284,19 +320,21 @@ async function startSession(db, phoneNumber, opts = {}) {
       if (session.timers.heartbeat) clearInterval(session.timers.heartbeat);
       session.timers.heartbeat = setInterval(async () => {
         try { await sock.sendPresenceUpdate('available'); } catch {}
-      }, 30000);
+      }, FORCED_PRESENCE_INTERVAL_MS);
+      session.timers.heartbeat.unref?.();
 
-      // ── Message de bienvenue (uniquement si nouveau login) ─────────────
+      // ── Message de bienvenue espacé après nouveau login ───────────────
       if (isNewLogin) {
-        try {
-          await sock.sendMessage(`${sId}@s.whatsapp.net`, {
-            text: `✅ *${config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑'} — Session ${sessionId} active*\n\n> _Session sauvegardée localement, indexée dans MongoDB_`
-          });
-        } catch {}
+        if (session.timers.welcome) clearTimeout(session.timers.welcome);
+        session.timers.welcome = setTimeout(async () => {
+          try {
+            await sock.sendMessage(`${sId}@s.whatsapp.net`, {
+              text: `✅ *${config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑'} — Session ${sessionId} active*\n\n> _Session sauvegardée localement, indexée dans MongoDB_`
+            });
+          } catch {}
+        }, SESSION_WELCOME_DELAY_MS);
+        session.timers.welcome.unref?.();
       }
-
-      // ── Initialisation des features par session ────────────────────────
-      try { handler.initializeAntiCall(sock); } catch {}
     }
   });
 
@@ -327,8 +365,9 @@ async function startSession(db, phoneNumber, opts = {}) {
       const from = msg.key.remoteJid;
       if (!from) continue;
       if (from.includes('@broadcast') || from.includes('@newsletter')) continue;
-      if (processedMessages.has(msg.key.id)) continue;
-      processedMessages.set(msg.key.id, Date.now());
+      const dedupKey = messageDedupKey(msg);
+      if (processedMessages.has(dedupKey)) continue;
+      processedMessages.set(dedupKey, Date.now());
 
       try {
         // [FIX SUB-BOT] Injecter le numéro de la session dans sock
@@ -389,6 +428,7 @@ function _clearSessionTimers(session) {
 function _closeSession(session, reason = 'session arrêtée') {
   if (!session) return;
   session.isStopping = true;
+  clearDeferredSocketTimers(session.sock);
   _cleanupSession(session);
   try { session.sock?.end?.(new Error(reason)); } catch {}
   try { session.sock?.ev?.removeAllListeners?.(); } catch {}
