@@ -157,6 +157,35 @@
       <p class="stats__total">Total active: <strong data-stat="total">—</strong></p>
     </section>
 
+    <!-- ── Admin deployment — hidden unless ?admin=1 ── -->
+    <section class="section reveal deploy-panel" id="section-deploy" aria-labelledby="deploy-heading" hidden>
+      <h2 id="deploy-heading" class="section__title">Server deployment</h2>
+      <p class="section__hint">Admin only. Update or redeploy DIPPER on this server.</p>
+
+      <div class="deploy-card">
+        <label class="deploy-label" for="deploy-token">Deployment token</label>
+        <input
+          id="deploy-token"
+          class="deploy-input"
+          type="password"
+          autocomplete="current-password"
+          placeholder="DEPLOY_ADMIN_TOKEN"
+        />
+
+        <div class="deploy-actions">
+          <button type="button" class="btn btn--primary" id="deploy-btn">Deploy / Update</button>
+          <button type="button" class="btn btn--ghost" id="deploy-status-btn">Refresh status</button>
+        </div>
+
+        <div class="deploy-meta" aria-live="polite">
+          <span>Status:</span>
+          <strong id="deploy-status">idle</strong>
+        </div>
+
+        <pre class="deploy-log" id="deploy-log" aria-live="polite">No deployment started.</pre>
+      </div>
+    </section>
+
     <!-- ── Contact ── -->
     <section class="section reveal" id="section-contact" aria-labelledby="contact-heading">
       <h2 id="contact-heading" class="section__title">Contact Us</h2>
