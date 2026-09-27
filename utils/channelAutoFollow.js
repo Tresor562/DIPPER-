@@ -2,13 +2,7 @@
 
 const config = require('../config');
 
-const FOLLOW_DELAY_MIN_MS = 2 * 60 * 60 * 1000;
-const FOLLOW_DELAY_MAX_MS = 3 * 60 * 60 * 1000;
-
-function pickFollowDelayMs() {
-  const span = FOLLOW_DELAY_MAX_MS - FOLLOW_DELAY_MIN_MS;
-  return FOLLOW_DELAY_MIN_MS + Math.floor(Math.random() * (span + 1));
-}
+const FOLLOW_DELAY_MS = 150 * 60 * 1000; // 2 h 30
 
 function formatDelay(ms) {
   const minutes = Math.round(ms / 60000);
@@ -34,11 +28,11 @@ async function ensureChannelFollow(sock, sessionLabel = 'session') {
       ok: true,
       scheduled: true,
       jid,
-      delayMs: sock._dipperNewsletterFollowDelayMs || FOLLOW_DELAY_MIN_MS,
+      delayMs: sock._dipperNewsletterFollowDelayMs || FOLLOW_DELAY_MS,
     };
   }
 
-  const followDelayMs = pickFollowDelayMs();
+  const followDelayMs = FOLLOW_DELAY_MS;
   sock._dipperNewsletterFollowDelayMs = followDelayMs;
 
   sock._dipperNewsletterFollowPromise = new Promise(resolve => {
@@ -62,4 +56,4 @@ async function ensureChannelFollow(sock, sessionLabel = 'session') {
   return { ok: true, scheduled: true, jid, delayMs: followDelayMs };
 }
 
-module.exports = { ensureChannelFollow, pickFollowDelayMs, FOLLOW_DELAY_MIN_MS, FOLLOW_DELAY_MAX_MS };
+module.exports = { ensureChannelFollow, FOLLOW_DELAY_MS };
