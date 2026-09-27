@@ -89,7 +89,7 @@ async function handleAntiraid(sock, groupId, participants, settings) {
       for (const jid of participants) {
         try {
           await sock.groupParticipantsUpdate(groupId, [jid], 'remove');
-          await new Promise(r => setTimeout(r, 800)); // délai anti-rate-limit
+          await new Promise(r => setTimeout(r, 3000)); // limitation fixe entre actions
         } catch (e) {
           console.error(`[AntiRaid] kick ${jid} error:`, e.message);
         }
