@@ -34,6 +34,19 @@ function nodeCheck(file) {
 function markExistingStableWaVersion(session) {
   if (session.includes('[PAIRING LIVE WA VERSION]')) return session;
 
+  // install-pairing-code-stability.js passe avant ce script dans prestart et
+  // peut déjà avoir remplacé le helper par getCurrentWhatsAppWebVersion().
+  // Dans ce cas on ne réécrit rien : on ajoute seulement notre marqueur
+  // commun afin que les vérificateurs sachent que la source live est active.
+  const stableHelper = 'async function getBaileysVersion({ force = false } = {}) {';
+  if (session.includes(stableHelper) && session.includes('return getCurrentWhatsAppWebVersion({ force });')) {
+    console.log('[pairing-resilience] version WhatsApp Web live multi-session déjà fournie par pairing-code-stability');
+    return session.replace(
+      stableHelper,
+      `// [PAIRING LIVE WA VERSION] compatible pairing-code-stability\n${stableHelper}`
+    );
+  }
+
   // Le wrapper Render applique stability-patch.js AVANT ce script.
   // Ce patch peut déjà avoir remplacé getBaileysVersion() par
   // fetchLatestWaWebVersion(). C'est un état valide : on le reconnaît
@@ -94,13 +107,24 @@ function install() {
     'timeouts socket principal'
   );
 
-  session = replaceOnce(
-    session,
-    "const sessionContext = require('./sessionContext');",
-    "const sessionContext = require('./sessionContext');\nconst { getCurrentWhatsAppWebVersion } = require('./waVersion'); // [PAIRING VERSION SOURCE]",
-    '[PAIRING VERSION SOURCE]',
-    'source version WA live dans sessionManager.js'
-  );
+  if (!session.includes('[PAIRING VERSION SOURCE]')) {
+    const existingLiveImport = "const { getCurrentWhatsAppWebVersion } = require('./waVersion');";
+    if (session.includes(existingLiveImport)) {
+      session = session.replace(
+        existingLiveImport,
+        `${existingLiveImport} // [PAIRING VERSION SOURCE]`
+      );
+      console.log('[pairing-resilience] source version WA live dans sessionManager.js déjà présente');
+    } else {
+      session = replaceOnce(
+        session,
+        "const sessionContext = require('./sessionContext');",
+        "const sessionContext = require('./sessionContext');\nconst { getCurrentWhatsAppWebVersion } = require('./waVersion'); // [PAIRING VERSION SOURCE]",
+        '[PAIRING VERSION SOURCE]',
+        'source version WA live dans sessionManager.js'
+      );
+    }
+  }
 
   session = markExistingStableWaVersion(session);
 
@@ -227,6 +251,7 @@ function install() {
 
   const sessionUsesLiveVersion =
     finalSession.includes('const version = await getCurrentWhatsAppWebVersion();')
+    || finalSession.includes('return getCurrentWhatsAppWebVersion({ force });')
     || finalSession.includes('[SessionManager] 🌐 WA Web version:');
 
   if (!sessionUsesLiveVersion) {

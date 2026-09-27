@@ -59,7 +59,7 @@ async function generatePdfApi(text) {
 }
 
 module.exports = {
-  name:'texttopdf', aliases:['topdf','txt2pdf','pdf','makepdf','textpdf'],
+  name:'texttopdf', aliases:['txt2pdf','pdf','makepdf','textpdf'],
   category: '🛠️ Outils généraux',
   description:'『 𝐃𝐈𝐏𝐏𝐄𝐑 』➪ ᴄᴏɴᴠᴇʀᴛɪᴛ ᴜɴ ᴛᴇxᴛᴇ ᴇɴ ꜰɪᴄʜɪᴇʀ PDF 📄',
   usage:`${config.prefix||'.'}texttopdf <texte>`,
