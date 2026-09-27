@@ -179,7 +179,12 @@ const getMessageBody = (message) => {
     message.imageMessage?.caption ||
     message.videoMessage?.caption ||
     message.documentMessage?.caption ||
+    // [COMMAND BODY EXTENDED TYPES] NexAI native-flow d'abord, puis
+    // compatibilité avec les anciens boutons/listes du bot.
     getInteractiveCommand(message, config.prefix) ||
+    message.buttonsResponseMessage?.selectedButtonId ||
+    message.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    message.templateButtonReplyMessage?.selectedId ||
     null
   );
 };
