@@ -58,5 +58,8 @@ jobs:
       - name: Run HOT updater regression tests
         run: npm run test:hot-updater
 
+      - name: Run NexAI WhatsApp rich UI regression tests
+        run: node --test tests/nexai-interactive.test.js tests/nexai-rich-ui.test.js
+
       - name: Validate command registry
         run: npm run validate:commands
