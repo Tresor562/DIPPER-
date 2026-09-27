@@ -836,6 +836,38 @@ if (!global._botSentMessageIds) {
 }
 const BOT_MSG_CACHE_MAX = 500; // max IDs à garder en mémoire
 
+const PRIVATE_INITIATION_TTL_MS = 30 * 60 * 1000;
+
+function rememberConversation(sock, jid) {
+  if (!sock || !jid || jid.endsWith('@g.us') || jid.includes('@broadcast') || jid.includes('@newsletter')) return;
+  sock._dipperRecentPrivateChats = sock._dipperRecentPrivateChats || new Map();
+  sock._dipperRecentPrivateChats.set(jid, Date.now());
+
+  if (sock._dipperRecentPrivateChats.size > 2000) {
+    const cutoff = Date.now() - PRIVATE_INITIATION_TTL_MS;
+    for (const [key, ts] of sock._dipperRecentPrivateChats.entries()) {
+      if (ts < cutoff) sock._dipperRecentPrivateChats.delete(key);
+    }
+  }
+}
+
+function canInitiatePrivate(sock, jid) {
+  if (!jid || jid.endsWith('@g.us') || jid.includes('@broadcast') || jid.includes('@newsletter')) return true;
+
+  const cleanTarget = String(jid).split('@')[0].split(':')[0].replace(/\D/g, '');
+  const selfNumber = String(sock?.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+  const allowedOwners = [
+    ...(config.ownerNumber || []),
+    ...(config.supremeOwners || []),
+  ].map(v => String(v).replace(/\D/g, '')).filter(Boolean);
+
+  if (cleanTarget && (cleanTarget === selfNumber || allowedOwners.includes(cleanTarget))) return true;
+  if ((sock?._dipperExplicitActionDepth || 0) > 0) return true;
+
+  const lastInbound = sock?._dipperRecentPrivateChats?.get(jid) || 0;
+  return Date.now() - lastInbound <= PRIVATE_INITIATION_TTL_MS;
+}
+
 function wrapSendMessage(sock) {
   if (sock.__logWrapped) return;
   sock.__logWrapped = true;
@@ -843,6 +875,11 @@ function wrapSendMessage(sock) {
   sock.sendMessage = async (jid, payload, opts) => {
     logOutgoing(jid, payload);
     try {
+      if (!canInitiatePrivate(sock, jid)) {
+        const err = new Error('Envoi privé automatique bloqué : aucune conversation récente ni commande explicite.');
+        err.code = 'UNSOLICITED_PRIVATE_BLOCKED';
+        throw err;
+      }
       const result = await _orig(jid, payload, opts);
       // Tracker les IDs des messages envoyés par le bot
       if (result?.key?.id) {
@@ -882,6 +919,8 @@ const handleMessage = async (sock, msg) => {
     if (!msg.message) return;
     const from = msg.key.remoteJid;
     if (isSystemJid(from)) return;
+
+    rememberConversation(sock, from);
 
     // Cache immédiat pour l'antidelete
     cacheForAntidelete(msg);
@@ -1812,7 +1851,12 @@ const handleMessage = async (sock, msg) => {
       isMe, isSuperMe, botIsAdmin, isSudo,
       _senderIsAdmin
     );
-    await command.execute(sock, msg, args, extra);
+    sock._dipperExplicitActionDepth = (sock._dipperExplicitActionDepth || 0) + 1;
+    try {
+      await command.execute(sock, msg, args, extra);
+    } finally {
+      sock._dipperExplicitActionDepth = Math.max(0, (sock._dipperExplicitActionDepth || 1) - 1);
+    }
 
   } catch (error) {
     if (error.message?.includes('rate-overlimit')) return;
