@@ -265,10 +265,17 @@ async function startSession(db, phoneNumber, opts = {}) {
       ].includes(statusCode);
       const shouldReconnect = !terminalDisconnect && !_isShuttingDown && !session.isStopping;
 
+      const disconnectCategory =
+        statusCode === DisconnectReason.loggedOut ? 'logged_out' :
+        statusCode === DisconnectReason.connectionReplaced ? 'connection_replaced' :
+        statusCode === DisconnectReason.badSession ? 'bad_session' :
+        statusCode == null ? 'unknown' : 'transient';
+
       session.lastDisconnect = {
         statusCode: statusCode ?? null,
         message: errorMessage,
         terminal: terminalDisconnect,
+        category: disconnectCategory,
         at: new Date().toISOString(),
       };
       clearDeferredSocketTimers(sock);
