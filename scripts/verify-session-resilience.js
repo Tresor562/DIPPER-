@@ -49,7 +49,8 @@ if (/purgeSessionPersistence\s*\(|deleteSessionData\s*\(/.test(immortalBlock)) {
 
 const reconnectStart = session.indexOf('// [SESSION IMMORTAL RECONNECT]');
 const reconnectBlock = reconnectStart >= 0 ? session.slice(reconnectStart, reconnectStart + 750) : '';
-if (/terminalDisconnect[\s\S]{0,350}DisconnectReason\.(connectionReplaced|badSession)/.test(reconnectBlock)) {
+const terminalExpr = reconnectBlock.match(/const terminalDisconnect\s*=\s*([^;]+);/)?.[1] || '';
+if (!terminalExpr || /DisconnectReason\.(connectionReplaced|badSession)/.test(terminalExpr)) {
   throw new Error('[verify-sessions] connectionReplaced/badSession encore terminal');
 }
 if (!reconnectBlock.includes('shouldReconnect = !terminalDisconnect')) {
