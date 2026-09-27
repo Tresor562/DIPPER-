@@ -254,6 +254,7 @@ function install() {
 
   const sessionUsesLiveVersion =
     finalSession.includes('const version = await getCurrentWhatsAppWebVersion();')
+    || finalSession.includes('return getCurrentWhatsAppWebVersion({ force });')
     || finalSession.includes('[SessionManager] 🌐 WA Web version:');
 
   if (!sessionUsesLiveVersion) {
