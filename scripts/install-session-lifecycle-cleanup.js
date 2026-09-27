@@ -138,10 +138,16 @@ function install() {
     throw new Error('[session-lifecycle] régression destructive: loggedOut déclenche encore une suppression automatique');
   }
 
-  // connectionReplaced / badSession ne doivent plus être dans la liste terminale.
+  // connectionReplaced / badSession ne doivent plus être dans l'affectation
+  // terminale. Ne pas scanner le bloc entier : disconnectCategory les cite
+  // volontairement pour le diagnostic, ce qui créait un faux positif CI.
   const reconnectStart = finalSession.indexOf('// [SESSION IMMORTAL RECONNECT]');
-  const reconnectBlock = reconnectStart >= 0 ? finalSession.slice(reconnectStart, reconnectStart + 700) : '';
-  if (/terminalDisconnect[\s\S]{0,350}DisconnectReason\.(connectionReplaced|badSession)/.test(reconnectBlock)) {
+  const reconnectBlock = reconnectStart >= 0 ? finalSession.slice(reconnectStart, reconnectStart + 900) : '';
+  const terminalAssignment = reconnectBlock.match(/const\s+terminalDisconnect\s*=([\s\S]*?);/)?.[0] || '';
+  if (!terminalAssignment) {
+    throw new Error('[session-lifecycle] affectation terminalDisconnect introuvable');
+  }
+  if (/DisconnectReason\.(connectionReplaced|badSession)/.test(terminalAssignment)) {
     throw new Error('[session-lifecycle] régression: connectionReplaced/badSession encore terminal');
   }
 

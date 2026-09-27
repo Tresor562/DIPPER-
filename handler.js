@@ -182,6 +182,31 @@ const getMessageBody = (message) => {
   );
 };
 
+// [ELITEPROTECH NATIVE FLOW INPUT]
+const getInteractiveActionBody = (message) => {
+  try {
+    const flow = message?.interactiveResponseMessage?.nativeFlowResponseMessage;
+    const raw = flow?.paramsJson || flow?.paramsJSON || '';
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const id = parsed?.id || parsed?.selected_id || parsed?.selectedId || parsed?.row_id || parsed?.rowId;
+      if (
+        typeof id === 'string' &&
+        id.length <= 256 &&
+        id.startsWith(config.prefix)
+      ) return id.trim();
+    }
+
+    const legacyList = message?.listResponseMessage?.singleSelectReply?.selectedRowId;
+    if (
+      typeof legacyList === 'string' &&
+      legacyList.length <= 256 &&
+      legacyList.startsWith(config.prefix)
+    ) return legacyList.trim();
+  } catch (_) {}
+  return '';
+};
+
 const getMediaType = (message) => {
   if (!message) return null;
   if (message.imageMessage)                                    return 'image';
@@ -950,7 +975,8 @@ const handleMessage = async (sock, msg) => {
         content.conversation ||
         content.extendedTextMessage?.text ||
         content.imageMessage?.caption ||
-        content.videoMessage?.caption || ''
+        content.videoMessage?.caption ||
+        getInteractiveActionBody(content) || ''
       );
     }
     body = (body || '').trim();

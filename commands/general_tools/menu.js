@@ -11,6 +11,7 @@ const prefix = config.prefix || '.';
 const styleManager = require('../../utils/styleManager');
 const { getCustomMenuConfig } = require('../group_management/custommenu');
 const { getConnectedOwnerName } = require('../../utils/ownerIdentity');
+const { proto, prepareWAMessageMedia, generateWAMessageFromContent } = require('@whiskeysockets/baileys'); // [ELITEPROTECH WHATSAPP UI]
 
 // Utilise la configuration officielle (config.supremeOwnerLids), pas une
 // liste codée en dur — évite l'incohérence trouvée précédemment (un seul
@@ -995,6 +996,150 @@ function trackMenu(messageId, data) {
   _pendingMenus.set(sessionContext.scopeKey(messageId), { ...data, ts: Date.now() });
 }
 
+/**
+ * EliteProTech-inspired WhatsApp surface.
+ * Native Flow is progressive enhancement: if the client/server rejects it,
+ * Dipper falls back to the existing image+caption/text menu with no loss of
+ * commands or reply-based navigation.
+ */
+function extractEliteActionId(msg) {
+  const content = msg?.message || {};
+  const interactive = content.interactiveResponseMessage?.nativeFlowResponseMessage;
+  const raw = interactive?.paramsJson || interactive?.paramsJSON || '';
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const id = parsed?.id || parsed?.selected_id || parsed?.selectedId || parsed?.row_id || parsed?.rowId;
+      if (typeof id === 'string' && id.length <= 256) return id.trim();
+    } catch (_) {}
+  }
+  const legacyList = content.listResponseMessage?.singleSelectReply?.selectedRowId;
+  if (typeof legacyList === 'string' && legacyList.length <= 256) return legacyList.trim();
+  return '';
+}
+
+function eliteContextInfo(rawSender) {
+  return {
+    mentionedJid: rawSender ? [rawSender] : [],
+    forwardingScore: 1,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+      newsletterJid: config.newsletterJid || '120363411005383995@newsletter',
+      newsletterName: config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑',
+      serverMessageId: -1,
+    },
+  };
+}
+
+function quickReplyButton(label, commandId) {
+  return {
+    name: 'quick_reply',
+    buttonParamsJson: JSON.stringify({
+      display_text: String(label || '').slice(0, 40),
+      id: String(commandId || '').slice(0, 256),
+    }),
+  };
+}
+
+function categorySelectButton(categoryNames, categories) {
+  const rows = categoryNames.slice(0, 10).map((cat, index) => ({
+    header: '',
+    title: `${displayCategory(cat)} (${(categories[cat] || []).length})`.slice(0, 72),
+    description: 'Ouvrir cette catégorie',
+    id: `${prefix}categorymenu ${index}`,
+  }));
+  if (!rows.length) return null;
+  return {
+    name: 'single_select',
+    buttonParamsJson: JSON.stringify({
+      title: 'Explorer les catégories',
+      sections: [{ title: 'THE BIG DIPPER', highlight_label: 'Menu', rows }],
+    }),
+  };
+}
+
+async function sendEliteProTechMenuMessage(sock, jid, {
+  text,
+  imageBuffer = null,
+  quoted = null,
+  rawSender = '',
+  categoryNames = [],
+  categories = {},
+  buttons = null,
+} = {}) {
+  const fallback = {
+    mentions: rawSender ? [rawSender] : [],
+    contextInfo: eliteContextInfo(rawSender),
+  };
+  if (Buffer.isBuffer(imageBuffer) && imageBuffer.length > 256) {
+    fallback.image = imageBuffer;
+    fallback.caption = text;
+  } else {
+    fallback.text = text;
+  }
+
+  try {
+    let header = proto.Message.InteractiveMessage.Header.create({
+      title: '',
+      subtitle: '',
+      hasMediaAttachment: false,
+    });
+
+    if (Buffer.isBuffer(imageBuffer) && imageBuffer.length > 256) {
+      const prepared = await prepareWAMessageMedia(
+        { image: imageBuffer },
+        { upload: sock.waUploadToServer }
+      );
+      header = proto.Message.InteractiveMessage.Header.create({
+        ...prepared,
+        title: '',
+        subtitle: '',
+        hasMediaAttachment: true,
+      });
+    }
+
+    let actionButtons = Array.isArray(buttons) ? buttons.filter(Boolean).slice(0, 3) : null;
+    if (!actionButtons?.length) {
+      actionButtons = [
+        categorySelectButton(categoryNames, categories),
+        quickReplyButton('⚡ Ping', `${prefix}ping`),
+        quickReplyButton('🎨 Styles', `${prefix}stylelist`),
+      ].filter(Boolean).slice(0, 3);
+    }
+
+    const interactiveMessage = proto.Message.InteractiveMessage.create({
+      body: proto.Message.InteractiveMessage.Body.create({ text: String(text || '').slice(0, 3900) }),
+      footer: proto.Message.InteractiveMessage.Footer.create({ text: 'THE BIG DIPPER • EliteProTech UX' }),
+      header,
+      nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+        buttons: actionButtons,
+        messageParamsJson: '{}',
+        messageVersion: 1,
+      }),
+      contextInfo: eliteContextInfo(rawSender),
+    });
+
+    const generated = generateWAMessageFromContent(
+      jid,
+      {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+            interactiveMessage,
+          },
+        },
+      },
+      { quoted: quoted || undefined, userJid: sock.user?.id }
+    );
+
+    await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
+    return generated;
+  } catch (error) {
+    console.warn('[eliteprotech-menu] Native Flow indisponible, fallback classique:', error.message);
+    return sock.sendMessage(jid, fallback, quoted ? { quoted } : undefined);
+  }
+}
+
 // Aperçu : en-tête habituel (avec style/titre/image personnalisés) + liste
 // numérotée des catégories, chacune avec son nombre de commandes.
 function buildCategoryOverview(style, botName, ownerName, userRank, prefix, categoryNames, categories, count, senderJid) {
@@ -1485,7 +1630,7 @@ function buildMenuContext(rawSender, isSupreme, sock) {
 
 module.exports = {
   name: 'grimoire',
-  aliases: ['commands','menu','index','m','ɢʀɪᴍᴏɪʀᴇ',
+  aliases: ['commands','menu','index','m','categorymenu','ɢʀɪᴍᴏɪʀᴇ',
     'style0',
     'style1','style2','style3','style4','style5',
     'style6','style7','style8','style9','style10',
@@ -1502,8 +1647,47 @@ module.exports = {
 
       const body = (
         msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text || ''
+        msg.message?.extendedTextMessage?.text ||
+        extractEliteActionId(msg) || ''
       ).trim().toLowerCase().replace(/^[.\\/!#]/, '');
+
+      const categoryMatch = body.match(/^categorymenu\s+(\d+)(?:\s+(\d+))?$/);
+      if (categoryMatch) {
+        const { categories, categoryNames, count, botName, ownerName, userRank, styleActif, imageUrl } =
+          buildMenuContext(rawSender, isSupreme, sock);
+        const index = Number(categoryMatch[1]);
+        const page = Math.max(1, Number(categoryMatch[2] || 1));
+        const catName = categoryNames[index];
+        if (!catName || !categories[catName]) return extra.reply('❌ Catégorie introuvable.');
+
+        const detailText = buildCategoryDetail(catName, categories[catName], page);
+        let imageBuffer = imageUrl ? await getImageBufferFromUrl(imageUrl) : null;
+        if (!imageBuffer) imageBuffer = await getImageBufferForStyle(styleActif);
+
+        const totalPages = Math.max(1, Math.ceil(categories[catName].length / COMMANDS_PER_PAGE));
+        const navButtons = [
+          quickReplyButton('← Menu', `${prefix}menu`),
+          page > 1 ? quickReplyButton('‹ Précédent', `${prefix}categorymenu ${index} ${page - 1}`) : null,
+          page < totalPages ? quickReplyButton('Suivant ›', `${prefix}categorymenu ${index} ${page + 1}`) : null,
+        ].filter(Boolean);
+
+        const sentDetail = await sendEliteProTechMenuMessage(sock, extra.from, {
+          text: detailText,
+          imageBuffer,
+          quoted: msg,
+          rawSender,
+          buttons: navButtons,
+        });
+
+        if (sentDetail?.key?.id) {
+          trackMenu(sentDetail.key.id, {
+            style: styleActif, botName, ownerName, userRank, prefix,
+            categoryNames, categories, count, senderJid: rawSender,
+            currentCategory: catName, currentPage: page, mode: 'category', resultList: null,
+          });
+        }
+        return;
+      }
 
       const styleMatch = body.match(/^style(\d+)$/);
       if (styleMatch) {
@@ -1531,27 +1715,14 @@ module.exports = {
       let imageBuffer = imageUrl ? await getImageBufferFromUrl(imageUrl) : null;
       if (!imageBuffer) imageBuffer = await getImageBufferForStyle(styleActif);
 
-      const messageOptions = {
-        mentions: [rawSender],
-        contextInfo: {
-          forwardingScore: 1,
-          isForwarded: true,
-          forwardedNewsletterMessageInfo: {
-            newsletterJid: config.newsletterJid || '120363411005383995@newsletter',
-            newsletterName: config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑',
-            serverMessageId: -1
-          }
-        }
-      };
-
-      if (imageBuffer) {
-        messageOptions.image   = imageBuffer;
-        messageOptions.caption = menuText;
-      } else {
-        messageOptions.text = menuText;
-      }
-
-      const sentMsg = await sock.sendMessage(extra.from, messageOptions, { quoted: msg });
+      const sentMsg = await sendEliteProTechMenuMessage(sock, extra.from, {
+        text: menuText,
+        imageBuffer,
+        quoted: msg,
+        rawSender,
+        categoryNames,
+        categories,
+      });
 
       // Mémorise ce menu pour permettre la navigation par réponse
       // (voir handleMenuNavigationReply, branché dans handler.js).
@@ -1571,6 +1742,7 @@ module.exports = {
 };
 
 module.exports.handleMenuNavigationReply = handleMenuNavigationReply;
+module.exports.sendEliteProTechMenuMessage = sendEliteProTechMenuMessage;
 
 // Export pour handler.js — correction automatique des fautes de frappe
 // sur N'IMPORTE QUELLE commande tapée dans le bot (pas seulement via le
