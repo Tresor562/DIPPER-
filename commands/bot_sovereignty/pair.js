@@ -124,6 +124,8 @@ async function _pairViaService(sock, msg, extra, cleanNumber) {
         COOLDOWN: err.message,
         ALREADY_ACTIVE: err.message,
         CODE_FAILED: `Échec de génération du code : ${err.message}`,
+        SESSION_REPLACED: err.message,
+        RECONNECT_PENDING: err.message,
       };
       return extra.reply(styled(err.code === 'COOLDOWN' ? 'warning' : 'error', 'PAIR', messages[err.code] || err.message));
     }
