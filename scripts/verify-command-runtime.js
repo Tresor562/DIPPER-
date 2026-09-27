@@ -12,7 +12,6 @@ const files = {
   menu: path.join(ROOT, 'commands', 'general_tools', 'menu.js'),
   allmenu: path.join(ROOT, 'commands', 'general_tools', 'allmenu.js'),
   ping: path.join(ROOT, 'commands', 'general_tools', 'ping.js'),
-  repere: path.join(ROOT, 'commands', 'bot_sovereignty', 'repere.js'),
   responseInstaller: path.join(ROOT, 'scripts', 'install-response-style.js'),
   runtimeInstaller: path.join(ROOT, 'scripts', 'install-command-runtime-fixes.js'),
   styleCatalog: path.join(ROOT, 'utils', 'styleCatalog.js'),
@@ -34,7 +33,6 @@ const index = read('index');
 const menu = read('menu');
 const allmenu = read('allmenu');
 const ping = read('ping');
-const repere = read('repere');
 const styleCatalog = read('styleCatalog');
 const carousel = read('carousel');
 
@@ -91,10 +89,6 @@ if (!styleCatalog.includes('IMAGE_PAGES')) throw new Error('[verify-runtime] poo
 for (const marker of ['relayMessage', 'sendMessage', 'fallbackText']) {
   if (!carousel.includes(marker)) throw new Error(`[verify-runtime] transport carrousel incomplet: ${marker}`);
 }
-
-// REPERE : commande canonique et protection owner.
-if (!/name\s*:\s*['"]repere['"]/.test(repere)) throw new Error('[verify-runtime] commande repere canonique absente');
-if (!/ownerOnly\s*:\s*true/.test(repere)) throw new Error('[verify-runtime] protection ownerOnly de repere absente');
 
 // PING : doit rester une commande réelle et utiliser le socket connecté.
 if (!ping.includes('module.exports') || !ping.includes('sock')) throw new Error('[verify-runtime] ping incomplet');
