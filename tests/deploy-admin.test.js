@@ -46,7 +46,7 @@ test('admin deployment endpoint requires token and runs only server-side configu
   const oldWorkdir = process.env.DIPPER_DEPLOY_WORKDIR;
 
   process.env.DEPLOY_ADMIN_TOKEN = 'test-token-0123456789';
-  process.env.DIPPER_DEPLOY_COMMAND = '"' + process.execPath + '" -e "console.log(\\'deploy-ok\\')"';
+  process.env.DIPPER_DEPLOY_COMMAND = '"' + process.execPath + '" -e "console.log(12345)"';
   process.env.DIPPER_DEPLOY_WORKDIR = process.cwd();
 
   const deployManager = require('../utils/deployManager');
@@ -79,7 +79,7 @@ test('admin deployment endpoint requires token and runs only server-side configu
     const finished = await waitForDeploy(deployManager);
     assert.equal(finished.status, 'success');
     assert.equal(finished.exitCode, 0);
-    assert.match(finished.log, /deploy-ok/);
+    assert.match(finished.log, /12345/);
   } finally {
     await new Promise(resolve => server.close(resolve));
     if (oldToken === undefined) delete process.env.DEPLOY_ADMIN_TOKEN;
