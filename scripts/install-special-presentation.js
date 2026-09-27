@@ -7,14 +7,13 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const menuPath = path.join(ROOT, 'commands', 'general_tools', 'menu.js');
 const pingPath = path.join(ROOT, 'commands', 'general_tools', 'ping.js');
-const reperePath = path.join(ROOT, 'commands', 'bot_sovereignty', 'repere.js');
 const handlerPath = path.join(ROOT, 'handler.js');
 const helperPath = path.join(ROOT, 'utils', 'specialPresentation.js');
 const verifierPath = path.join(ROOT, 'scripts', 'verify-command-runtime.js');
 const MARKER = '[SPECIAL PREMIUM PRESENTATION]';
 const VERIFIER_MARKER = '[PREMIUM PING VERIFIER COMPAT]';
 
-for (const file of [menuPath, pingPath, reperePath, handlerPath, helperPath, verifierPath]) {
+for (const file of [menuPath, pingPath, handlerPath, helperPath, verifierPath]) {
   if (!fs.existsSync(file)) throw new Error(`[special-presentation] fichier absent: ${file}`);
 }
 
@@ -82,22 +81,6 @@ if (!verifier.includes(VERIFIER_MARKER)) {
   fs.writeFileSync(verifierPath, verifier, 'utf8');
 }
 
-let repere = fs.readFileSync(reperePath, 'utf8');
-if (!repere.includes('[REPERE SPECIAL PREMIUM PRESENTATION]')) {
-  const configImport = "const config = require('../../config');";
-  if (repere.includes(configImport)) {
-    repere = repere.replace(
-      configImport,
-      configImport + "\nconst styleManager = require('../../utils/styleManager');\nconst { sendSpecialPresentation } = require('../../utils/specialPresentation'); // [REPERE SPECIAL PREMIUM PRESENTATION]"
-    );
-  }
-  const callNeedle = '      await sendInteractiveRepere(sock, from, caption, imageBuffer, quoted);';
-  if (repere.includes(callNeedle)) {
-    repere = repere.replace(callNeedle, `      const activeStyle = styleManager.getStyle();\n      let styleImage = null;\n      try {\n        const menu = require('../general_tools/menu');\n        if (typeof menu.getImageBufferForStyle === 'function') styleImage = await menu.getImageBufferForStyle(activeStyle);\n      } catch (_) {}\n      await sendSpecialPresentation(sock, from, {\n        text: caption, style: activeStyle, imageBuffer: styleImage || imageBuffer || null, commandName: 'repere',\n      });`);
-  }
-  fs.writeFileSync(reperePath, repere, 'utf8');
-}
-
 // Ce bloc ne peut être installé qu'après install-response-style/global-footer,
 // car il utilise commandResponseStorage et decoratePayload.
 let handler = fs.readFileSync(handlerPath, 'utf8');
@@ -108,9 +91,9 @@ if (!handler.includes('[GENERIC SPECIAL COMMAND PRESENTATION]') && handler.inclu
   fs.writeFileSync(handlerPath, handler, 'utf8');
 }
 
-for (const file of [helperPath, menuPath, pingPath, reperePath, handlerPath, verifierPath]) {
+for (const file of [helperPath, menuPath, pingPath, handlerPath, verifierPath]) {
   const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
   if (check.status !== 0) throw new Error(`[special-presentation] syntaxe invalide ${path.relative(ROOT, file)}: ${check.stderr || check.stdout}`);
 }
 
-console.log('[special-presentation] ✅ helper + commandes spéciales + vérificateur premium prêts');
+console.log('[special-presentation] ✅ helper + commandes spéciales restantes + vérificateur premium prêts');
