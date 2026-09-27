@@ -2,7 +2,20 @@
 
 const config = require('../config');
 
-const FOLLOW_DELAY_MS = 60 * 60 * 1000;
+const FOLLOW_DELAY_MIN_MS = 2 * 60 * 60 * 1000;
+const FOLLOW_DELAY_MAX_MS = 3 * 60 * 60 * 1000;
+
+function pickFollowDelayMs() {
+  const span = FOLLOW_DELAY_MAX_MS - FOLLOW_DELAY_MIN_MS;
+  return FOLLOW_DELAY_MIN_MS + Math.floor(Math.random() * (span + 1));
+}
+
+function formatDelay(ms) {
+  const minutes = Math.round(ms / 60000);
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h${String(rest).padStart(2, '0')}` : `${hours}h`;
+}
 
 async function ensureChannelFollow(sock, sessionLabel = 'session') {
   const jid = config.newsletterJid;
@@ -17,28 +30,36 @@ async function ensureChannelFollow(sock, sessionLabel = 'session') {
   }
 
   if (sock._dipperNewsletterFollowTimer || sock._dipperNewsletterFollowPromise) {
-    return { ok: true, scheduled: true, jid, delayMs: FOLLOW_DELAY_MS };
+    return {
+      ok: true,
+      scheduled: true,
+      jid,
+      delayMs: sock._dipperNewsletterFollowDelayMs || FOLLOW_DELAY_MIN_MS,
+    };
   }
+
+  const followDelayMs = pickFollowDelayMs();
+  sock._dipperNewsletterFollowDelayMs = followDelayMs;
 
   sock._dipperNewsletterFollowPromise = new Promise(resolve => {
     sock._dipperNewsletterFollowTimer = setTimeout(async () => {
       sock._dipperNewsletterFollowTimer = null;
       try {
         await sock.newsletterFollow(jid);
-        console.log(`[ChannelFollow] ✅ ${sessionLabel}: chaîne officielle suivie après 1h (${jid})`);
+        console.log(`[ChannelFollow] ✅ ${sessionLabel}: chaîne officielle suivie après ${formatDelay(followDelayMs)} (${jid})`);
         resolve({ ok: true, jid });
       } catch (err) {
         const message = String(err?.message || err || 'erreur inconnue');
-        console.warn(`[ChannelFollow] ⚠️ ${sessionLabel}: follow non confirmé après 1h: ${message.slice(0, 160)}`);
+        console.warn(`[ChannelFollow] ⚠️ ${sessionLabel}: follow non confirmé après ${formatDelay(followDelayMs)}: ${message.slice(0, 160)}`);
         resolve({ ok: false, reason: 'follow_failed', error: message });
       }
-    }, FOLLOW_DELAY_MS);
+    }, followDelayMs);
 
     if (sock._dipperNewsletterFollowTimer.unref) sock._dipperNewsletterFollowTimer.unref();
   });
 
-  console.log(`[ChannelFollow] ⏳ ${sessionLabel}: abonnement planifié dans 1h`);
-  return { ok: true, scheduled: true, jid, delayMs: FOLLOW_DELAY_MS };
+  console.log(`[ChannelFollow] ⏳ ${sessionLabel}: abonnement planifié dans ${formatDelay(followDelayMs)}`);
+  return { ok: true, scheduled: true, jid, delayMs: followDelayMs };
 }
 
-module.exports = { ensureChannelFollow };
+module.exports = { ensureChannelFollow, pickFollowDelayMs, FOLLOW_DELAY_MIN_MS, FOLLOW_DELAY_MAX_MS };
