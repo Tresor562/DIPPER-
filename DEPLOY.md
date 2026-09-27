@@ -65,6 +65,50 @@ pm2 save
 
 Avec un fichier `.env`, les variables sont chargées par le projet au démarrage.
 
+## Déployer / mettre à jour depuis le site
+
+Le panneau admin est intégré au même site que le pairing, mais il reste caché
+pour les visiteurs normaux.
+
+Ouvre :
+
+```text
+https://VOTRE-DOMAINE/?admin=1
+```
+
+Configure d'abord sur le serveur :
+
+```env
+DEPLOY_ADMIN_TOKEN=une-cle-longue-et-aleatoire
+DIPPER_DEPLOY_WORKDIR=/chemin/vers/DIPPER-
+DIPPER_DEPLOY_COMMAND=git fetch origin main && git reset --hard origin/main && npm install --omit=dev --no-audit --no-fund && pm2 restart dipper --update-env
+```
+
+Le navigateur n'envoie jamais de commande shell. Il envoie uniquement le
+token admin à `POST /admin/deploy`. La commande réellement exécutée vient
+exclusivement de `DIPPER_DEPLOY_COMMAND`, configurée côté serveur.
+
+Routes :
+
+- `POST /admin/deploy` : lance le déploiement ;
+- `GET /admin/deploy/status` : retourne état et journal court ;
+- les deux exigent `Authorization: Bearer <DEPLOY_ADMIN_TOKEN>`.
+
+Un seul déploiement peut tourner à la fois.
+
+### Si le serveur utilise THE_BIG_DIPPER comme wrapper
+
+Le processus WhatsApp tourne dans `THE_BIG_DIPPER/bot`. Dans ce cas, le
+plus propre est de faire travailler la commande depuis la racine du wrapper :
+
+```env
+DIPPER_DEPLOY_WORKDIR=/chemin/vers/THE_BIG_DIPPER
+DIPPER_DEPLOY_COMMAND=git fetch origin main && git reset --hard origin/main && node ensure-bot-submodule.js && cd bot && npm install --omit=dev --no-audit --no-fund && pm2 restart dipper --update-env
+```
+
+Ainsi le serveur récupère d'abord la version de THE_BIG_DIPPER, puis la
+révision DIPPER épinglée par le wrapper, avant de redémarrer le processus.
+
 ## Vérifications après déploiement
 
 ```bash
