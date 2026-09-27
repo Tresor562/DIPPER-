@@ -39,6 +39,7 @@ const sessionContext = require('./utils/sessionContext');
 const { loadCommands }         = require('./utils/commandLoader');
 const { addMessage }           = require('./utils/groupstats');
 const { isAllowedUser }        = require('./utils/jidHelpers');
+const { getInteractiveCommand } = require('./utils/nexaiInteractive');
 // [FIX] Import de trackMemberActivity depuis mentstats
 // Chargement différé (lazy) pour éviter les circular deps au boot
 let trackMemberActivity = null;
@@ -178,6 +179,7 @@ const getMessageBody = (message) => {
     message.imageMessage?.caption ||
     message.videoMessage?.caption ||
     message.documentMessage?.caption ||
+    getInteractiveCommand(message, config.prefix) ||
     null
   );
 };
@@ -944,16 +946,8 @@ const handleMessage = async (sock, msg) => {
 
     // ── DÉCODAGE CONTENU ───────────────────────────────────
     const content = getMessageContent(msg);
-    let body = '';
-    if (content) {
-      body = (
-        content.conversation ||
-        content.extendedTextMessage?.text ||
-        content.imageMessage?.caption ||
-        content.videoMessage?.caption || ''
-      );
-    }
-    body = (body || '').trim();
+    let body = content ? (getMessageBody(content) || '') : '';
+    body = String(body || '').trim();
 
     // ── IDENTITÉ EXPÉDITEUR ────────────────────────────────
     // En groupe, msg.key.participant contient le vrai JID de l'expéditeur
