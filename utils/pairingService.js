@@ -56,7 +56,7 @@ const _cooldowns = new Map();
 // Une session dont les creds indiquent `registered: true` n'est pas forcément
 // réellement reconnectée. On laisse donc un court délai au socket pour passer
 // à `isOnline=true` avant de décider qu'il faut refaire le pairing.
-const RECONNECT_GRACE_MS = 12 * 1000;
+const RECONNECT_GRACE_MS = 45 * 1000;
 const RECONNECT_POLL_MS = 250;
 
 function checkAndSetCooldown(requesterKey) {
@@ -185,7 +185,8 @@ async function resetDisconnectedRegisteredSession(db, cleanNumber, meta) {
  *   `pairingCode` est `null` si `reconnected` est `true` (session réellement
  *   reconnectée avec succès, aucun nouveau code à saisir).
  * @throws {PairingError} codes possibles :
- *   INVALID_NUMBER, COOLDOWN, ALREADY_ACTIVE, NO_MONGODB, CODE_FAILED
+ *   INVALID_NUMBER, COOLDOWN, ALREADY_ACTIVE, NO_MONGODB, CODE_FAILED,
+ *   SESSION_REPLACED, RECONNECT_PENDING
  */
 async function createPairingSession(phoneNumber, options = {}) {
   if (!process.env.MONGODB_URI) {
@@ -251,10 +252,35 @@ async function createPairingSession(phoneNumber, options = {}) {
       return { sessionId, pairingCode: null, reconnected: true };
     }
 
-    // L'utilisateur a demandé explicitement une reconnexion mais les anciens
-    // creds n'ont pas permis de revenir en ligne : repartir proprement sur un
-    // auth state vierge afin de générérer un nouveau code au lieu de répondre
-    // à tort "déjà appairé".
+    const lastDisconnect =
+      (typeof sessionManager.getLastDisconnect === 'function'
+        ? sessionManager.getLastDisconnect(cleanNumber)
+        : null) ||
+      sessionManager.getSession(cleanNumber)?.lastDisconnect ||
+      null;
+
+    const category = lastDisconnect?.category || 'unknown';
+    const detail = lastDisconnect?.message || 'aucune raison fournie par WhatsApp';
+
+    // Ne jamais effacer des credentials valides sur une simple panne réseau,
+    // un timeout ou une reconnexion encore en cours. C'était la principale
+    // cause possible de "re-pairing" destructif sans explication.
+    if (category === 'connection_replaced') {
+      throw new PairingError(
+        'SESSION_REPLACED',
+        `La session a été remplacée par une autre connexion. Aucun credential n’a été supprimé. Détail : ${detail}`
+      );
+    }
+
+    if (category !== 'logged_out' && category !== 'bad_session') {
+      throw new PairingError(
+        'RECONNECT_PENDING',
+        `La session enregistrée n’est pas encore revenue en ligne. Aucun credential n’a été supprimé. Dernière raison : ${detail}`
+      );
+    }
+
+    // Uniquement après une raison terminale explicite (logged_out/bad_session)
+    // une demande de pairing peut repartir sur un auth state neuf.
     try {
       session = await resetDisconnectedRegisteredSession(db, cleanNumber, { owner, origin });
     } catch (err) {
