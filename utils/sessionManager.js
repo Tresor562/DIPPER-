@@ -71,6 +71,7 @@ function logCriticalSessionError(message) {
 // ── Map globale des sessions actives ──────────────────────────────────────
 // sessionId → { sock, sessionId, phoneNumber, timers: {}, processedMessages: Map }
 const activeSessions = new Map();
+const lastDisconnects = new Map();
 
 const FORCED_PRESENCE_INTERVAL_MS = 15 * 60 * 1000;
 const SESSION_WELCOME_DELAY_MS = 4 * 60 * 1000;
@@ -278,6 +279,11 @@ async function startSession(db, phoneNumber, opts = {}) {
         category: disconnectCategory,
         at: new Date().toISOString(),
       };
+      lastDisconnects.set(sessionId, session.lastDisconnect);
+      if (lastDisconnects.size > 5000) {
+        const oldest = lastDisconnects.keys().next().value;
+        lastDisconnects.delete(oldest);
+      }
       clearDeferredSocketTimers(sock);
 
       console.log(`[SessionManager] 🔌 ${sessionId} déconnecté — code=${statusCode ?? '?'} | raison="${errorMessage}" | terminal=${terminalDisconnect} | reconnexion=${shouldReconnect}`);
@@ -498,6 +504,10 @@ function getSession(phoneNumber) {
   return activeSessions.get(toSessionId(phoneNumber)) || null;
 }
 
+function getLastDisconnect(phoneNumber) {
+  return lastDisconnects.get(toSessionId(phoneNumber)) || null;
+}
+
 /**
  * Retourne toutes les sessions actives.
  */
@@ -615,6 +625,7 @@ module.exports = {
   startSession,
   loadAllSessions,
   getSession,
+  getLastDisconnect,
   getAllSessions,
   stopSession,
   toSessionId,
