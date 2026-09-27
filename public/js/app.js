@@ -31,6 +31,7 @@
     CODE_FAILED: 'We couldn\u2019t generate a code right now. Please try again.',
     SESSION_REPLACED: 'This WhatsApp session is active somewhere else. DIPPER kept the saved credentials and did not force a new pairing.',
     RECONNECT_PENDING: 'The saved WhatsApp session has not reconnected yet. DIPPER kept the credentials instead of disconnecting the account. Try again shortly.',
+    PAIRING_IN_PROGRESS: 'A pairing request is already running for this number. DIPPER kept the current session instead of replacing it.',
     BAD_REQUEST: 'Something about that request didn\u2019t go through. Please try again.',
     BAD_RESPONSE: 'The DIPPER server did not return a valid pairing response. Check that the bot process is running and that /pair is reachable on this server.',
     INTERNAL_ERROR: 'Something went wrong on our end. Please try again.',
