@@ -5,10 +5,9 @@
  * ╚══════════════════════════════════════════════════════════════╝
  *
  * RÔLE :
- *   Exposer utils/pairingService.js via HTTP, pour que le futur site
- *   Web (Phase 4B) et le futur bot Telegram (Phase 4C) puissent tous les
- *   deux créer des sessions de pairing par une SEULE et MÊME API — donc
- *   par le même moteur — sans dupliquer la moindre logique de pairing.
+ *   Exposer le moteur de pairing via HTTP et servir le frontend intégré.
+ *   Le même serveur fournit aussi un contrôle de déploiement admin protégé,
+ *   sans accepter de commande arbitraire depuis le navigateur.
  *
  * CE FICHIER NE CONTIENT AUCUNE LOGIQUE MÉTIER :
  *   - Il ne décide jamais si un numéro est valide, si une session existe
@@ -38,9 +37,11 @@
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const { createPairingSession, PairingError } = require('../utils/pairingService');
 const sessionManager = require('../utils/sessionManager');
 const { tryServeStatic } = require('./staticFiles');
+const deployManager = require('../utils/deployManager');
 
 const MAX_BODY_BYTES = 10 * 1024; // largement suffisant pour { phoneNumber }
 
@@ -77,7 +78,7 @@ function isAuthorizedInternalCall(req) {
 function applyCorsHeaders(req, res) {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Internal-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Internal-Token, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
@@ -271,6 +272,83 @@ async function handleSessionStopRoute(req, res) {
 }
 
 /**
+ * Déploiement admin depuis le site intégré.
+ *
+ * Sécurité :
+ * - DEPLOY_ADMIN_TOKEN doit être défini côté serveur.
+ * - Le navigateur n'envoie JAMAIS une commande shell ; il envoie seulement
+ *   le token. La commande exécutée est DIPPER_DEPLOY_COMMAND, fixée dans
+ *   l'environnement du serveur.
+ * - Comparaison du token en temps constant.
+ */
+function isAuthorizedDeployCall(req) {
+  const expected = String(process.env.DEPLOY_ADMIN_TOKEN || '');
+  if (!expected) return false;
+
+  const auth = String(req.headers.authorization || '');
+  const provided = auth.toLowerCase().startsWith('bearer ')
+    ? auth.slice(7)
+    : '';
+
+  if (!provided) return false;
+
+  const a = Buffer.from(expected);
+  const b = Buffer.from(provided);
+  if (a.length !== b.length) return false;
+
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch (_) {
+    return false;
+  }
+}
+
+function requireDeployAuth(req, res) {
+  if (!process.env.DEPLOY_ADMIN_TOKEN) {
+    sendJSON(res, 503, {
+      error: 'DEPLOY_DISABLED',
+      message: 'Le déploiement web n’est pas configuré sur ce serveur.',
+    });
+    return false;
+  }
+
+  if (!isAuthorizedDeployCall(req)) {
+    sendJSON(res, 401, {
+      error: 'UNAUTHORIZED',
+      message: 'Token de déploiement invalide ou manquant.',
+    });
+    return false;
+  }
+  return true;
+}
+
+function handleDeployStatusRoute(req, res) {
+  if (!requireDeployAuth(req, res)) return;
+  return sendJSON(res, 200, deployManager.snapshot());
+}
+
+function handleDeployRoute(req, res) {
+  if (!requireDeployAuth(req, res)) return;
+
+  try {
+    const result = deployManager.triggerDeploy();
+    return sendJSON(res, 202, result);
+  } catch (err) {
+    if (err?.code === 'DEPLOY_NOT_CONFIGURED') {
+      return sendJSON(res, 503, { error: err.code, message: err.message });
+    }
+    if (err?.code === 'DEPLOY_ALREADY_RUNNING') {
+      return sendJSON(res, 409, { error: err.code, message: err.message });
+    }
+    console.error('[api] /admin/deploy erreur:', err);
+    return sendJSON(res, 500, {
+      error: 'DEPLOY_FAILED',
+      message: 'Impossible de lancer le déploiement.',
+    });
+  }
+}
+
+/**
  * Construit le serveur HTTP (sans le démarrer) — utile pour les tests,
  * qui peuvent appeler `.listen(0, ...)` sur un port éphémère.
  */
@@ -299,6 +377,12 @@ function createServer() {
       }
       if (req.method === 'POST' && url.pathname === '/session/stop') {
         return await handleSessionStopRoute(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/admin/deploy/status') {
+        return handleDeployStatusRoute(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/admin/deploy') {
+        return handleDeployRoute(req, res);
       }
       // [Fusion site+API — voir api/staticFiles.js] Aucune route API ne
       // correspond : tente de servir le site (public/) sur cette même
