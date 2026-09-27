@@ -103,15 +103,33 @@ async function initMultiSession() {
   }
 }
 
-let startDarkmoodScheduler = null;
-try {
-  const dm = require('./commands/bot_sovereignty/darkmood');
-  startDarkmoodScheduler = dm.startDarkmoodScheduler || null;
-} catch (_) {}
-
 // [PHASE 2 — nettoyage] global.ghostgMode supprimé : plus rien ne le lit
 // depuis la correction du bug d'isolation (voir database.js getGhostgMode/
 // setGhostgMode et commands/bot_sovereignty/ghostg.js).
+
+// ==========================================
+  // STABILITÉ POST-CONNEXION
+  // ==========================================
+  // Le WebSocket Baileys garde sa propre connexion. Les actions WhatsApp
+  // visibles sont volontairement espacées après connexion.
+  const FORCED_PRESENCE_INTERVAL_MS = 15 * 60 * 1000;
+  const SELF_ONLINE_NOTICE_DELAY_MS = 2 * 60 * 1000;
+  const OWNER_SYNC_NOTICE_DELAY_MS = 8 * 60 * 1000;
+  const AUTO_BIO_DELAY_MS = 15 * 60 * 1000;
+
+  function clearDeferredSocketTimers(sock) {
+    try {
+      if (sock?._dipperNewsletterFollowTimer) clearTimeout(sock._dipperNewsletterFollowTimer);
+      sock._dipperNewsletterFollowTimer = null;
+    } catch (_) {}
+    for (const key of ['_dipperMainChannelReactLiveTimers', '_dipperSecondaryChannelReactLiveTimers', '_dipperPostConnectTimers']) {
+      try {
+        const timers = sock?.[key];
+        if (Array.isArray(timers)) timers.forEach(t => clearTimeout(t));
+        sock[key] = [];
+      } catch (_) {}
+    }
+  }
 
 // ==========================================
 // STORE EN MÉMOIRE
@@ -164,6 +182,15 @@ const isSystemJid = (jid) =>
 const processedMessages = new Map(); // id → timestamp
 const PROCESSED_TTL = 30 * 60 * 1000; // 30 min
 
+function messageDedupKey(msg) {
+  return [
+    msg?.key?.remoteJid || '',
+    msg?.key?.participant || '',
+    msg?.key?.id || '',
+    msg?.key?.fromMe ? '1' : '0',
+  ].join('|');
+}
+
 function addProcessedMessage(id) {
   processedMessages.set(id, Date.now());
   // Limite de taille de sécurité
@@ -204,9 +231,12 @@ function getReconnectDelay() {
 // [FIX 3] Tous ici pour être nettoyés proprement
 // dans 'close' avant chaque reconnexion.
 // ==========================================
-let pingTimer      = null;
-let heartbeatTimer = null;
-let monitorTimer   = null;
+let pingTimer        = null;
+let heartbeatTimer   = null;
+let monitorTimer     = null;
+let selfNoticeTimer  = null;
+let ownerSyncTimer   = null;
+let autoBioTimer     = null;
 // [FIX] Mémorisation du dernier état WebSocket valide entre les cycles du monitorTimer.
 // Évite le ?(undefined) quand sock.ws est temporairement absent en début de session.
 let lastKnownWsState = null;
@@ -215,7 +245,7 @@ function startPingActif(sock) {
   if (pingTimer) clearInterval(pingTimer);
   pingTimer = setInterval(async () => {
     try { await sock.sendPresenceUpdate('available'); } catch (_) {}
-  }, 30 * 1000);
+  }, FORCED_PRESENCE_INTERVAL_MS);
 }
 
 // ==========================================
@@ -286,6 +316,10 @@ async function startBot() {
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (pingTimer)      { clearInterval(pingTimer);      pingTimer      = null; }
       if (monitorTimer)   { clearInterval(monitorTimer);   monitorTimer   = null; }
+      if (selfNoticeTimer) { clearTimeout(selfNoticeTimer); selfNoticeTimer = null; }
+      if (ownerSyncTimer)  { clearTimeout(ownerSyncTimer);  ownerSyncTimer  = null; }
+      if (autoBioTimer)    { clearTimeout(autoBioTimer);    autoBioTimer    = null; }
+      clearDeferredSocketTimers(sock);
       // 🧠 MemoryGuard : NE PAS arrêter ici — il est au niveau MODULE (survit aux reconnexions)
       // setSock() sera rappelé automatiquement sur la prochaine connexion (startBot)
       // [FIX] Reset de l'état WS mémorisé — évite d'afficher un état périmé
@@ -317,13 +351,9 @@ async function startBot() {
       botReadyTime      = Date.now();
       reconnectAttempts = 0;
 
-      // [FIX 3] Vider processedMessages à chaque reconnexion.
-      // Raison : après une déconnexion + reconnexion, Baileys peut
-      // re-livrer des messages récents (replay). Sans ce clear, ces
-      // messages sont ignorés car leur ID est déjà dans le Set →
-      // le bot semble "ne pas répondre" après une reconnexion.
-      // Impact mémoire : négligeable (Set vidé → GC immédiat).
-      processedMessages.clear();
+      // Conserver la fenêtre anti-doublon à travers les reconnexions.
+      // Baileys peut rejouer des messages récents après un reconnect :
+      // vider cette Map ici réexécuterait des commandes déjà traitées.
 
       const sId    = sock.user.id.split(':')[0];
       const p1     = process.env.PHONE_NUMBER || config.ownerNumber?.[0] || 'Inconnu';
@@ -333,7 +363,21 @@ async function startBot() {
       console.log('╭╼━≪• 𝐃𝐈𝐏𝐏𝐄𝐑  ɪs ᴀʟɪᴠᴇ •≫━╾╮');
       console.log('╰━━━━━━━━━━━━━━━━━━━━━━━╯');
 
-      // ── Rapport de premier appairage ──
+      // ── Actions post-pairing espacées ─────────────────────────────
+      // Aucune rafale juste après l'ouverture : chaque action visible est
+      // planifiée séparément et annulée si la socket se ferme entre-temps.
+      const myJid = sId + '@s.whatsapp.net';
+
+      if (selfNoticeTimer) clearTimeout(selfNoticeTimer);
+      selfNoticeTimer = setTimeout(async () => {
+        try {
+          await sock.sendMessage(myJid, {
+            text: `✅ *${config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑'} est en ligne*\n\n> _Le sanctuaire est actif_`
+          });
+        } catch (_) {}
+      }, SELF_ONLINE_NOTICE_DELAY_MS);
+      selfNoticeTimer.unref?.();
+
       if (isNewLogin) {
         const syncMsg =
           `*╭╼━━━≪• ɪɴɪᴛɪᴀʟɪsᴀᴛɪᴏɴ •≫━━━╾╮*\n` +
@@ -342,21 +386,19 @@ async function startBot() {
           `*┃* 🔣 *ᴘʀᴇ́ғɪxᴇ* : [ ${prefix} ]\n` +
           `*╰━━━━━━━━━━━━━━━━━━━━━━━╯*\n` +
           `> *♰ 𝐃𝐈𝐏𝐏𝐄𝐑 ♰*`;
-        for (const num of (config.ownerNumber || []).slice(0, 2)) {
-          try {
-            const jid = String(num).replace(/\D/g, '') + '@s.whatsapp.net';
-            await sock.sendMessage(jid, { text: syncMsg, mentions: [`${sId}@s.whatsapp.net`] });
-          } catch (_) {}
-        }
-      }
 
-      // ── Message de démarrage en DM ──
-      const myJid = sId + '@s.whatsapp.net';
-      try {
-        await sock.sendMessage(myJid, {
-          text: `✅ *${config.botName || '𝐓𝐇𝐄 𝐁𝐈𝐆 𝐃𝐈𝐏𝐏𝐄𝐑'} est en ligne*\n\n> _Le sanctuaire est actif_`
-        });
-      } catch (_) {}
+        if (ownerSyncTimer) clearTimeout(ownerSyncTimer);
+        ownerSyncTimer = setTimeout(async () => {
+          for (const num of (config.ownerNumber || []).slice(0, 2)) {
+            try {
+              const jid = String(num).replace(/\D/g, '') + '@s.whatsapp.net';
+              await sock.sendMessage(jid, { text: syncMsg, mentions: [`${sId}@s.whatsapp.net`] });
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            } catch (_) {}
+          }
+        }, OWNER_SYNC_NOTICE_DELAY_MS);
+        ownerSyncTimer.unref?.();
+      }
 
       // ── KEEP ALIVE — 5 minutes ──────────────────────────────────
       // [PERF] sendPresenceUpdate toutes les 5 min (au lieu de 2 min)
@@ -371,20 +413,19 @@ async function startBot() {
       //   → sendPresenceUpdate = signal léger, non comptabilisé comme message
       //   → Message IB = 288/jour max mais dans son propre inbox → OK
       if (heartbeatTimer) clearInterval(heartbeatTimer);
-      // [PERF v5] heartbeatTimer = PRESENCE UNIQUEMENT (très léger, 30s)
-      // Le message alive est géré par monitorTimer (5 min) → pas de doublon
+      // Présence applicative volontairement rare. Le keepAlive WebSocket
+      // interne à Baileys reste indépendant de cette présence visible.
       heartbeatTimer = setInterval(async () => {
         try { await sock.sendPresenceUpdate('available'); } catch (_) {}
-      }, 30 * 1000); // toutes les 30 secondes — maintient la session active
+      }, FORCED_PRESENCE_INTERVAL_MS);
+      heartbeatTimer.unref?.();
 
       if (config.autoBio) {
-        try { await sock.updateProfileStatus(`♛_ᴊᴇsᴜs ᴇsᴛ ʀᴏɪ_♛`); } catch (_) {}
-      }
-
-      handler.initializeAntiCall(sock);
-
-      if (typeof startDarkmoodScheduler === 'function') {
-        try { startDarkmoodScheduler(sock); } catch (_) {}
+        if (autoBioTimer) clearTimeout(autoBioTimer);
+        autoBioTimer = setTimeout(async () => {
+          try { await sock.updateProfileStatus(`♛_ᴊᴇsᴜs ᴇsᴛ ʀᴏɪ_♛`); } catch (_) {}
+        }, AUTO_BIO_DELAY_MS);
+        autoBioTimer.unref?.();
       }
 
       // [FIX DOUBLON] startPingActif supprimé — heartbeatTimer (30s ci-dessus)
@@ -480,8 +521,9 @@ async function startBot() {
 
       const from = msg.key.remoteJid;
       if (!from || isSystemJid(from)) continue;
-      if (processedMessages.has(msg.key.id)) continue;
-      addProcessedMessage(msg.key.id);
+      const dedupKey = messageDedupKey(msg);
+      if (processedMessages.has(dedupKey)) continue;
+      addProcessedMessage(dedupKey);
 
       try {
         // [PHASE 1 — ISOLATION DONNÉES] Bot mono-session (legacy, sans
