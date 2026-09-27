@@ -1451,8 +1451,8 @@ const handleMessage = async (sock, msg) => {
         }
       }
 
-      // [FIX REPERE] Guard !msg.key.fromMe : les messages envoyés PAR le bot
-      // (ex: .repere avec forwardedNewsletterMessageInfo) ne doivent JAMAIS
+      // Les messages envoyés PAR le bot avec forwardedNewsletterMessageInfo
+      // ne doivent JAMAIS
       // [PERF] Pré-calculer une seule fois le corps texte et le type de message
       // pour les systèmes automatiques — évite de le recalculer dans chaque handler
       const _hasText    = !!(msg.message?.conversation || msg.message?.extendedTextMessage?.text ||
