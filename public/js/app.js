@@ -271,6 +271,151 @@
   }
 
   // ══════════════════════════════════════════════════════════════════
+  // Admin deployment panel — visible only with ?admin=1
+  // ══════════════════════════════════════════════════════════════════
+  (function initDeployPanel() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('admin') !== '1') return;
+
+    var section = document.getElementById('section-deploy');
+    var tokenInput = document.getElementById('deploy-token');
+    var deployBtn = document.getElementById('deploy-btn');
+    var refreshBtn = document.getElementById('deploy-status-btn');
+    var statusEl = document.getElementById('deploy-status');
+    var logEl = document.getElementById('deploy-log');
+
+    if (!section || !tokenInput || !deployBtn || !refreshBtn || !statusEl || !logEl) return;
+    section.hidden = false;
+
+    var pollTimer = null;
+
+    function setDeployBusy(isBusy) {
+      deployBtn.disabled = isBusy;
+      refreshBtn.disabled = isBusy;
+      deployBtn.classList.toggle('is-loading', isBusy);
+    }
+
+    function authHeaders() {
+      var token = tokenInput.value.trim();
+      if (!token) {
+        throw new Error('Enter your deployment token.');
+      }
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token,
+      };
+    }
+
+    function renderDeployState(data) {
+      if (!data) return;
+      statusEl.textContent = data.status || 'unknown';
+      statusEl.dataset.state = data.status || 'unknown';
+      logEl.textContent = data.log || 'No deployment output yet.';
+      logEl.scrollTop = logEl.scrollHeight;
+
+      if (data.status === 'running') {
+        startDeployPolling();
+      } else {
+        stopDeployPolling();
+      }
+    }
+
+    function readJsonResponse(res) {
+      return res.json().catch(function () {
+        return { error: 'BAD_RESPONSE', message: 'Invalid response from the DIPPER server.' };
+      }).then(function (data) {
+        if (!res.ok) {
+          var err = new Error(data.message || ('HTTP ' + res.status));
+          err.code = data.error || 'HTTP_ERROR';
+          throw err;
+        }
+        return data;
+      });
+    }
+
+    function refreshDeployStatus(silent) {
+      var headers;
+      try {
+        headers = authHeaders();
+      } catch (err) {
+        if (!silent) showToast(err.message);
+        return Promise.reject(err);
+      }
+
+      return fetch('/admin/deploy/status', {
+        method: 'GET',
+        headers: headers,
+      })
+        .then(readJsonResponse)
+        .then(function (data) {
+          renderDeployState(data);
+          return data;
+        })
+        .catch(function (err) {
+          if (!silent) showToast(err.message || 'Unable to read deployment status.');
+          throw err;
+        });
+    }
+
+    function startDeployPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(function () {
+        refreshDeployStatus(true).catch(function () {});
+      }, 2000);
+    }
+
+    function stopDeployPolling() {
+      if (!pollTimer) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    refreshBtn.addEventListener('click', function () {
+      setDeployBusy(true);
+      refreshDeployStatus(false)
+        .finally(function () { setDeployBusy(false); });
+    });
+
+    deployBtn.addEventListener('click', function () {
+      var headers;
+      try {
+        headers = authHeaders();
+      } catch (err) {
+        showToast(err.message);
+        tokenInput.focus();
+        return;
+      }
+
+      setDeployBusy(true);
+      fetch('/admin/deploy', {
+        method: 'POST',
+        headers: headers,
+        body: '{}',
+      })
+        .then(readJsonResponse)
+        .then(function (data) {
+          renderDeployState(data);
+          startDeployPolling();
+        })
+        .catch(function (err) {
+          showToast(err.message || 'Unable to start deployment.');
+        })
+        .finally(function () {
+          setDeployBusy(false);
+        });
+    });
+
+    tokenInput.addEventListener('keydown', function (evt) {
+      if (evt.key === 'Enter') {
+        evt.preventDefault();
+        refreshBtn.click();
+      }
+    });
+
+    window.addEventListener('beforeunload', stopDeployPolling);
+  })();
+
+  // ══════════════════════════════════════════════════════════════════
   // Copy to clipboard — no alert(), no browser popup
   // ══════════════════════════════════════════════════════════════════
   function copyText(text) {
