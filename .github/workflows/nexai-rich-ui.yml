@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: '20'
       - name: Install production dependencies
-        run: npm install --omit=dev --ignore-scripts --no-audit --no-fund
+        run: npm install --omit=dev --no-audit --no-fund
       - name: Syntax-check rich UI integration
         run: |
           node --check handler.js
