@@ -61,4 +61,5 @@ jobs:
             }
           }
           console.log('NexAI rich UI command registry OK');
+          process.exit(0);
           NODE
