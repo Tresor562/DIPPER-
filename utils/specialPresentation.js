@@ -24,7 +24,7 @@ const ownerProfileCache = new WeakMap();
 const SPECIAL_COMMANDS = new Set([
   'menu', 'grimoire', 'allmenu', 'commands', 'index', 'menu2', 'help',
   'ping', 'alive', 'uptime', 'botinfo', 'botstatus', 'info', 'status', 'presence',
-  'repere', 'repère', 'owner', 'support', 'freebot', 'about', 'channelid',
+  'owner', 'support', 'freebot', 'about', 'channelid',
   'pair', 'sessions', 'session', 'mode', 'prefix', 'setprefix', 'setmode',
   'setbotname', 'setmenuimage', 'setnewsletter', 'update',
 ]);
