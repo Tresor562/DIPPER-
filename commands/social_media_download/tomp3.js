@@ -76,7 +76,7 @@ function resolveVideoFromQuoted(quotedMessage) {
 // ══════════════════════════════════════════════════════════════
 module.exports = {
   name          : 'tomp3',
-  aliases       : ['toaudio', 'mp3'],
+  aliases       : ['toaudio'],
   category: '📥 Téléchargements',
   description   : '『 𝐃𝐈𝐏𝐏𝐄𝐑 』➪ ᴄᴏɴᴠᴇʀᴛɪᴛ ᴜɴᴇ ᴠɪᴅᴇ́ᴏ ᴇɴ ᴀᴜᴅɪᴏ ᴍᴘ3',
   usage         : `${prefix}tomp3 (ᴇɴ ʀᴇ́ᴘᴏɴᴅᴀɴᴛ ᴀ̀ ᴜɴᴇ ᴠɪᴅᴇ́ᴏ)`,
