@@ -13,6 +13,7 @@ const sessionIndex = require('../utils/sessionIndex');
 const original = {
   getDb: mongoClient.getDb,
   getSession: sessionManager.getSession,
+  getLastDisconnect: sessionManager.getLastDisconnect,
   startSession: sessionManager.startSession,
   stopSession: sessionManager.stopSession,
   requestPairingCode: sessionManager.requestPairingCode,
@@ -24,6 +25,7 @@ const original = {
 function restore() {
   mongoClient.getDb = original.getDb;
   sessionManager.getSession = original.getSession;
+  sessionManager.getLastDisconnect = original.getLastDisconnect;
   sessionManager.startSession = original.startSession;
   sessionManager.stopSession = original.stopSession;
   sessionManager.requestPairingCode = original.requestPairingCode;
@@ -76,11 +78,11 @@ test('une session registered qui redevient en ligne est reconnue comme reconnect
   assert.equal(mongoDeleted, 0);
 });
 
-test('des creds registered mais hors ligne sont supprimés des fichiers et de Mongo puis un nouveau code est généré', async () => {
+test('un logged_out explicite autorise un re-pair propre, contrairement à une coupure transitoire', async () => {
   process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://test';
 
   const db = {};
-  let current = null;
+  let current = { isOnline: false, isRegistered: true };
   let starts = 0;
   let stopped = 0;
   let filesDeleted = 0;
@@ -89,11 +91,13 @@ test('des creds registered mais hors ligne sont supprimés des fichiers et de Mo
 
   mongoClient.getDb = async () => db;
   sessionManager.getSession = () => current;
+  sessionManager.getLastDisconnect = () => ({
+    category: 'logged_out',
+    message: 'logged out',
+  });
   sessionManager.startSession = async () => {
     starts++;
-    current = starts === 1
-      ? { isOnline: false, isRegistered: true }
-      : { isOnline: false, isRegistered: false };
+    current = { isOnline: false, isRegistered: false };
     return current;
   };
   sessionManager.stopSession = async () => { stopped++; current = null; return true; };
@@ -111,7 +115,7 @@ test('des creds registered mais hors ligne sont supprimés des fichiers et de Mo
     pairingCode: 'ABCD-1234',
     reconnected: false,
   });
-  assert.equal(starts, 2);
+  assert.equal(starts, 1);
   assert.equal(stopped, 1);
   assert.equal(filesDeleted, 1);
   assert.equal(mongoDeleted, 1);
