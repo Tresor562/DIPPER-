@@ -469,47 +469,32 @@ module.exports = {
       console.log(`[kickall v8] ✅ Délai terminé — début des expulsions`);
 
       // ═══════════════════════════════════════════════════════
-      // ÉTAPE 11 : Expulsions par lots avec fallback individuel
+      // ÉTAPE 11 : Expulsions séquentielles avec limitation fixe
       // ═══════════════════════════════════════════════════════
-      // Lots de 5 si < 50 membres, 3 si > 50 (évite le rate-limit WA)
-      const BATCH = toKick.length > 50 ? 3 : 5;
-      const PAUSE = toKick.length > 50 ? 2500 : 1500;
+      const ACTION_PAUSE_MS = 3000;
       let expelled = 0;
       let failed   = 0;
 
-      console.log(`[kickall v8] Expulsions : ${toKick.length} membres / lots de ${BATCH} / pause ${PAUSE}ms`);
+      console.log(`[kickall v8] Expulsions : ${toKick.length} membres / 1 action à la fois / pause ${ACTION_PAUSE_MS}ms`);
 
-      for (let i = 0; i < toKick.length; i += BATCH) {
-        const lot = toKick.slice(i, i + BATCH);
-
+      for (let i = 0; i < toKick.length; i++) {
+        const jid = toKick[i];
         try {
-          await sock.groupParticipantsUpdate(from, lot, 'remove');
-          expelled += lot.length;
-          console.log(`[kickall v8] ✅ Lot ${Math.floor(i / BATCH) + 1} : +${lot.length} (total:${expelled})`);
-        } catch (batchErr) {
-          // Fallback individuel si le lot entier échoue
-          console.warn(`[kickall v8] ⚠️ Lot échoué (${batchErr.message}) → fallback individuel`);
-          for (const jid of lot) {
-            try {
-              await sock.groupParticipantsUpdate(from, [jid], 'remove');
-              expelled++;
-              console.log(`[kickall v8] ✅ Individuel : ${jid}`);
-              await sleep(600);
-            } catch (indErr) {
-              const m = String(indErr.message || '');
-              if (m.includes('not-a-participant') || m.includes('404')) {
-                console.warn(`[kickall v8] ⚠️ ${jid} → déjà parti (ignoré)`);
-              } else {
-                failed++;
-                console.error(`[kickall v8] ❌ ${jid} → ${m}`);
-              }
-            }
+          await sock.groupParticipantsUpdate(from, [jid], 'remove');
+          expelled++;
+          console.log(`[kickall v8] ✅ Individuel ${i + 1}/${toKick.length} : ${jid}`);
+        } catch (err) {
+          const m = String(err?.message || err || '');
+          if (m.includes('not-a-participant') || m.includes('404')) {
+            console.warn(`[kickall v8] ⚠️ ${jid} → déjà parti (ignoré)`);
+          } else {
+            failed++;
+            console.error(`[kickall v8] ❌ ${jid} → ${m}`);
           }
         }
 
-        // Pause entre les lots (sauf après le dernier)
-        if (i + BATCH < toKick.length) {
-          await sleep(PAUSE);
+        if (i + 1 < toKick.length) {
+          await sleep(ACTION_PAUSE_MS);
         }
       }
 
