@@ -119,7 +119,7 @@ async function subscribeToLiveUpdates(sock, jid, sessionId) {
 
 function scheduleLiveSubscriptions(sock, jid, sessionId) {
   if (sock._dipperSecondaryChannelReactLiveTimers) return;
-  const delays = [2000, 60_000, 5 * 60_000, 60 * 60_000 + 5000];
+  const delays = [60 * 60_000, 6 * 60 * 60_000, 12 * 60 * 60_000];
   sock._dipperSecondaryChannelReactLiveTimers = delays.map(delay => {
     const timer = setTimeout(() => subscribeToLiveUpdates(sock, jid, sessionId).catch(() => {}), delay);
     if (timer.unref) timer.unref();
