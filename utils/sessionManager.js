@@ -208,6 +208,10 @@ async function startSession(db, phoneNumber, opts = {}) {
     },
   });
 
+  if (typeof handler.initializeSendPolicy === 'function') {
+    handler.initializeSendPolicy(sock);
+  }
+
   const session = {
     sock,
     sessionId,
