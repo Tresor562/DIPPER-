@@ -1,0 +1,36 @@
+'use strict';
+
+const config = require('../../config');
+const sessionContext = require('../../utils/sessionContext');
+const { renderSnakeCard, renderDominoCard, sendRichCard } = require('../../utils/nexaiRichUi');
+
+const CAT='🎮 Jeux & Fun', TTL=45*60*1000;
+global.__nexaiArcadeStates ||= { snake:new Map(), domino:new Map() };
+const STORE=global.__nexaiArcadeStates;
+const rnd=n=>Math.floor(Math.random()*n);
+const key=(extra,msg,type)=>sessionContext.scopeKey(`${type}:${extra?.from||msg?.key?.remoteJid}:${extra?.sender||msg?.key?.participant||msg?.key?.remoteJid}`);
+function prune(map){const now=Date.now();for(const[k,v]of map)if(!v||now-(v.updatedAt||0)>TTL)map.delete(k);}
+
+function food(s){const used=new Set(s.snake.map(p=>`${p.x}:${p.y}`));for(let i=0;i<500;i++){const p={x:rnd(s.cols),y:rnd(s.rows)};if(!used.has(`${p.x}:${p.y}`))return p;}return{x:0,y:0};}
+function newSnake(best=0,speed='normal'){const s={cols:16,rows:12,snake:[{x:7,y:6},{x:6,y:6},{x:5,y:6}],direction:'right',score:0,stage:1,best,speed:['chill','normal','fire'].includes(speed)?speed:'normal',gameOver:false,updatedAt:Date.now()};s.food=food(s);return s;}
+const D={up:{x:0,y:-1},down:{x:0,y:1},left:{x:-1,y:0},right:{x:1,y:0}},OP={up:'down',down:'up',left:'right',right:'left'};
+function moveSnake(s,dir){if(s.gameOver)return;s.direction=D[dir]&&OP[s.direction]!==dir?dir:s.direction;const steps=s.speed==='fire'?3:s.speed==='chill'?1:2;for(let z=0;z<steps;z++){const h=s.snake[0],d=D[s.direction],n={x:h.x+d.x,y:h.y+d.y};if(n.x<0||n.y<0||n.x>=s.cols||n.y>=s.rows||s.snake.some(p=>p.x===n.x&&p.y===n.y)){s.gameOver=true;s.best=Math.max(s.best,s.score);break;}s.snake.unshift(n);if(n.x===s.food.x&&n.y===s.food.y){s.score+=s.speed==='fire'?30:s.speed==='chill'?10:20;s.stage=Math.min(10,1+Math.floor(s.score/100));s.best=Math.max(s.best,s.score);s.food=food(s);}else s.snake.pop();}s.updatedAt=Date.now();}
+async function sendSnake(sock,msg,extra,s){return sendRichCard({sock,jid:extra.from,imageBuffer:await renderSnakeCard(s),caption:s.gameOver?`🐍 *NexAI Cyber Snake*\nGame over • score ${s.score} • best ${s.best}`:`🐍 *NexAI Cyber Snake*\nScore ${s.score} • stage ${s.stage}/10 • speed ${s.speed.toUpperCase()}`,footer:'NEXAI • CYBER ARCADE',quoted:extra.from?.endsWith('@g.us')?msg:null,buttons:[{text:'▲ Up',id:'nexui:snake:up'},{text:'◀ Left',id:'nexui:snake:left'},{text:'▼ Down',id:'nexui:snake:down'},{text:'▶ Right',id:'nexui:snake:right'},{text:'↻ New game',id:'nexui:snake:new'}],fallbackLines:[`${config.prefix||'.'}snake up|down|left|right`,`${config.prefix||'.'}snake new`,`${config.prefix||'.'}snake speed chill|normal|fire`]});}
+
+function set(){const a=[];for(let x=0;x<=6;x++)for(let y=x;y<=6;y++)a.push([x,y]);for(let i=a.length-1;i;i--){const j=rnd(i+1);[a[i],a[j]]=[a[j],a[i]];}return a;}
+const tk=t=>`${t[0]}-${t[1]}`;
+function parse(v){const m=String(v||'').match(/^([0-6])-([0-6])$/);return m?[+m[1],+m[2]]:null;}
+function same(a,b){return a&&b&&((a[0]===b[0]&&a[1]===b[1])||(a[0]===b[1]&&a[1]===b[0]));}
+function newDomino(){const a=set();return{playerHand:a.splice(0,7),aiHand:a.splice(0,7),boneyard:a,chain:[],leftEnd:null,rightEnd:null,level:1,status:'YOUR TURN',gameOver:false,winner:null,updatedAt:Date.now()};}
+function can(t,s){return!!t&&(!s.chain.length||t.includes(s.leftEnd)||t.includes(s.rightEnd));}
+function place(t,s){if(!s.chain.length){s.chain.push([...t]);s.leftEnd=t[0];s.rightEnd=t[1];return true;}if(t[1]===s.leftEnd){s.chain.unshift([...t]);s.leftEnd=t[0];return true;}if(t[0]===s.leftEnd){s.chain.unshift([t[1],t[0]]);s.leftEnd=t[1];return true;}if(t[0]===s.rightEnd){s.chain.push([...t]);s.rightEnd=t[1];return true;}if(t[1]===s.rightEnd){s.chain.push([t[1],t[0]]);s.rightEnd=t[0];return true;}return false;}
+function win(s){if(!s.playerHand.length){s.gameOver=true;s.winner='you';s.status='YOU WIN';return true;}if(!s.aiHand.length){s.gameOver=true;s.winner='NexAI';s.status='NEXAI WINS';return true;}if(!s.boneyard.length&&!s.playerHand.some(t=>can(t,s))&&!s.aiHand.some(t=>can(t,s))){const p=h=>h.reduce((n,t)=>n+t[0]+t[1],0),a=p(s.playerHand),b=p(s.aiHand);s.gameOver=true;s.winner=a===b?'draw':a<b?'you':'NexAI';s.status=s.winner==='draw'?'DRAW':`${String(s.winner).toUpperCase()} WINS`;return true;}return false;}
+function ai(s){if(s.gameOver)return;let i=-1,w=-1;s.aiHand.forEach((t,n)=>{if(can(t,s)&&t[0]+t[1]+(t[0]===t[1]?4:0)>w){i=n;w=t[0]+t[1]+(t[0]===t[1]?4:0);}});while(i<0&&s.boneyard.length){s.aiHand.push(s.boneyard.pop());i=can(s.aiHand.at(-1),s)?s.aiHand.length-1:-1;}if(i>=0){const[t]=s.aiHand.splice(i,1);place(t,s);s.status=`NEXAI PLAYED ${tk(t)}`;}else s.status='NEXAI PASSED';win(s);}
+function play(s,k){if(s.gameOver)return;const wanted=parse(k),i=s.playerHand.findIndex(t=>same(t,wanted));if(i<0){s.status='TILE NOT IN HAND';return;}const tile=s.playerHand[i];if(!can(tile,s)){s.status=`CANNOT PLAY ${tk(tile)}`;return;}s.playerHand.splice(i,1);place(tile,s);s.status=`YOU PLAYED ${tk(tile)}`;if(!win(s))ai(s);s.level=Math.min(10,1+Math.floor(s.chain.length/4));s.updatedAt=Date.now();}
+function pass(s){if(s.gameOver)return;if(s.playerHand.some(t=>can(t,s))){s.status='PLAYABLE TILE AVAILABLE';return;}if(s.boneyard.length){const d=s.boneyard.pop();s.playerHand.push(d);s.status=`YOU DREW ${tk(d)}`;if(!can(d,s))ai(s);}else{ s.status='YOU PASSED';ai(s);}s.updatedAt=Date.now();win(s);}
+async function sendDomino(sock,msg,extra,s){const buttons=s.playerHand.slice(0,7).map(d=>({text:`${d[0]} | ${d[1]}`,id:`nexui:domino:play:${tk(d)}`}));buttons.push({text:s.gameOver?'↻ New game':'↪ Pass / Draw',id:s.gameOver?'nexui:domino:new':'nexui:domino:pass'});return sendRichCard({sock,jid:extra.from,imageBuffer:await renderDominoCard({...s,boneyardCount:s.boneyard.length}),caption:`🀄 *NexAI Domino*\n${s.status} • you ${s.playerHand.length} • NexAI ${s.aiHand.length}`,footer:'NEXAI • DOMINO ENGINE',quoted:extra.from?.endsWith('@g.us')?msg:null,buttons,fallbackLines:[`${config.prefix||'.'}domino play 6-4`,`${config.prefix||'.'}domino pass`,`${config.prefix||'.'}domino new`]});}
+
+const snake={name:'snake',aliases:['cybersnake','snakegame'],category:CAT,description:'Snake interactif avec interface visuelle NexAI.',usage:`${config.prefix||'.'}snake [up|down|left|right|new|speed normal]`,async execute(sock,msg,args,extra){prune(STORE.snake);const k=key(extra,msg,'snake'),a=String(args?.[0]||'show').toLowerCase();let s=STORE.snake.get(k);if(!s||a==='new')s=newSnake(s?.best||0,s?.speed||'normal');else if(a==='speed'){const v=String(args?.[1]||'').toLowerCase();if(['chill','normal','fire'].includes(v))s.speed=v;s.updatedAt=Date.now();}else if(D[a])moveSnake(s,a);STORE.snake.set(k,s);return sendSnake(sock,msg,extra,s);}};
+const domino={name:'domino',aliases:['dominoes','dominoai'],category:CAT,description:'Domino interactif contre NexAI avec interface visuelle.',usage:`${config.prefix||'.'}domino [new|pass|play 6-4]`,async execute(sock,msg,args,extra){prune(STORE.domino);const k=key(extra,msg,'domino'),a=String(args?.[0]||'show').toLowerCase();let s=STORE.domino.get(k);if(!s||a==='new')s=newDomino();else if(a==='play')play(s,args?.[1]);else if(a==='pass')pass(s);s.updatedAt=Date.now();STORE.domino.set(k,s);return sendDomino(sock,msg,extra,s);}};
+
+module.exports=[snake,domino];
