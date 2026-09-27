@@ -1,322 +1,165 @@
-/**
- * TikTok Downloader - THE BIG DIPPER
- * Télécharge des vidéos ou carrousels TikTok.
- * Version fusionnée : cascade de 6 fournisseurs, priorité HD systématique,
- * validation de taille du média, repli buffer→URL.
- */
+'use strict';
 
-const { ttdl } = require('ruhend-scraper');
-const sessionContext = require('../../utils/sessionContext');
+const crypto = require('crypto');
 const axios = require('axios');
-const APIs = require('../../utils/api');
+const { ttdl } = require('ruhend-scraper');
 const config = require('../../config');
+const APIs = require('../../utils/api');
+const sessionContext = require('../../utils/sessionContext');
+const { renderTikTokCard, sendRichCard } = require('../../utils/nexaiRichUi');
 
-// Stockage des ID de messages traités pour éviter les doublons
-const processedMessages = new Set();
+global.__nexaiTikTokCache ||= new Map();
+const CACHE = global.__nexaiTikTokCache;
+const TTL = 30 * 60 * 1000;
+const processed = new Set();
 
-function toSmallCaps(text) {
-  const normal = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const smallCaps = "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ0123456789";
-  const cleanedText = text.toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  return cleanedText.split('').map(c => {
-    const index = normal.indexOf(c);
-    return index !== -1 ? smallCaps[index] : c;
-  }).join('');
+const abs = u => !u ? null : String(u).startsWith('/') ? 'https://www.tikwm.com' + u : String(u);
+const domain = u => { try { return new URL(u).hostname.replace(/^www\./,''); } catch (_) { return 'tiktok.com'; } };
+const sender = msg => String(msg?.key?.participant || msg?.key?.remoteJid || '').split(':')[0];
+function prune(){const n=Date.now();for(const[k,v]of CACHE)if(!v||n-v.createdAt>TTL)CACHE.delete(k);}
+async function fetchBuffer(url, limit=8*1024*1024){if(!url)return null;try{const r=await axios.get(url,{responseType:'arraybuffer',timeout:12000,maxContentLength:limit,headers:{'User-Agent':'Mozilla/5.0'}});const b=Buffer.from(r.data||[]);return b.length>128?b:null;}catch(_){return null;}}
+
+async function tikwm(url){
+  const r=await axios.post('https://www.tikwm.com/api/',new URLSearchParams({url,hd:'1'}).toString(),{headers:{'Content-Type':'application/x-www-form-urlencoded','User-Agent':'Mozilla/5.0'},timeout:30000});
+  const d=r.data?.data;if(!d)throw new Error('TikWM sans données');
+  return {
+    videoUrl:abs(d.hdplay||d.play),
+    audioUrl:abs(d.music),
+    coverUrl:abs(d.cover||d.origin_cover||d.ai_dynamic_cover),
+    meta:{
+      author:d.author?.nickname||d.author?.unique_id||'TikTok Creator',
+      username:d.author?.unique_id||'',
+      description:d.title||'',
+      title:d.title||'',
+      views:d.play_count||0,likes:d.digg_count||0,comments:d.comment_count||0,
+      shares:d.share_count||0,saves:d.collect_count||0,duration:d.duration||0,
+      music:d.music_info?.title||d.music_info?.author||'Original sound',
+      source:'tiktok.com'
+    }
+  };
 }
 
-function getDomain(url) {
-  try {
-    const domain = new URL(url).hostname;
-    return domain.replace('www.', '');
-  } catch (e) {
-    return 'tiktok.com';
+async function customApi(url){
+  try{
+    const r=await APIs.getTikTokDownload(url);
+    if(!r?.videoUrl)return null;
+    return {videoUrl:r.videoUrl,audioUrl:r.audioUrl||null,coverUrl:r.cover||null,meta:{author:'TikTok Creator',description:r.title||'',title:r.title||'',source:domain(url)}};
+  }catch(_){return null;}
+}
+
+async function cobalt(url){
+  try{
+    const r=await axios.post('https://api.cobalt.tools/',{url,downloadMode:'auto',videoQuality:'max',tiktokH265:false},{headers:{'Content-Type':'application/json','Accept':'application/json','User-Agent':'Mozilla/5.0 NexAI'},timeout:35000});
+    const d=r.data||{};let videoUrl=d.url||null;
+    if(!videoUrl&&d.status==='picker'&&Array.isArray(d.picker))videoUrl=(d.picker.find(x=>x.type==='video')||d.picker[0])?.url||null;
+    return videoUrl?{videoUrl,audioUrl:null,coverUrl:null,meta:{author:'TikTok Creator',description:'TikTok media',source:domain(url)}}:null;
+  }catch(_){return null;}
+}
+
+async function resolve(url){
+  const tasks=await Promise.allSettled([tikwm(url),customApi(url)]);
+  for(const x of tasks)if(x.status==='fulfilled'&&x.value?.videoUrl)return x.value;
+  const c=await cobalt(url);if(c)return c;
+  return null;
+}
+
+async function sendVideo(sock,jid,url,msg){
+  try{
+    const r=await axios.get(url,{responseType:'arraybuffer',timeout:120000,maxContentLength:100*1024*1024,headers:{'User-Agent':'Mozilla/5.0','Accept':'video/*,*/*','Referer':'https://www.tiktok.com/'}});
+    const b=Buffer.from(r.data||[]);if(b.length<5000)throw new Error('media invalide');
+    return sock.sendMessage(jid,{video:b,mimetype:'video/mp4',caption:'🎬 *NexAI TikTok • Video*'},jid.endsWith('@g.us')?{quoted:msg}:undefined);
+  }catch(_){
+    return sock.sendMessage(jid,{video:{url},mimetype:'video/mp4',caption:'🎬 *NexAI TikTok • Video*'},jid.endsWith('@g.us')?{quoted:msg}:undefined);
   }
 }
 
-module.exports = {
-  name: 'tiktok',
-  aliases: ['illusions_tiktok', 'tt', 'ttdl', 'tiktokdl', 'illusion_tiktok', 'tkhd', 'tiktokpremium'],
-  category: '📥 Téléchargements',
-  description: '『 THE BIG DIPPER 』➪ ᴀsᴘɪʀᴇ ᴇᴛ ᴛᴇʟᴇᴄʜᴀʀɢᴇ ᴅᴇs ᴠɪᴅᴇᴏs ᴛɪᴋᴛᴏᴋ ᴇɴ ʜᴅ sᴀɴs ғɪʟɪɢʀᴀɴᴇ',
-  usage: `${config.prefix || '.'}tiktok [lien tiktok]`,
-  groupOnly: false,
-  adminOnly: false,
-  botAdminNeeded: false,
+async function sendAudio(sock,jid,url,msg){
+  if(!url)throw new Error('Audio séparé indisponible pour ce média.');
+  try{
+    const r=await axios.get(url,{responseType:'arraybuffer',timeout:90000,maxContentLength:40*1024*1024,headers:{'User-Agent':'Mozilla/5.0','Referer':'https://www.tiktok.com/'}});
+    const b=Buffer.from(r.data||[]);if(b.length<1000)throw new Error('audio invalide');
+    return sock.sendMessage(jid,{audio:b,mimetype:String(r.headers?.['content-type']||'audio/mpeg'),ptt:false,fileName:'NexAI-TikTok-Audio.mp3'},jid.endsWith('@g.us')?{quoted:msg}:undefined);
+  }catch(_){
+    return sock.sendMessage(jid,{audio:{url},mimetype:'audio/mpeg',ptt:false,fileName:'NexAI-TikTok-Audio.mp3'},jid.endsWith('@g.us')?{quoted:msg}:undefined);
+  }
+}
 
-  async execute(sock, msg, args, extra) {
-    const chatId = msg.key.remoteJid;
-    const reply = async (text) => await sock.sendMessage(chatId, { text }, { quoted: msg });
+async function carouselFallback(sock,msg,extra,url){
+  const data=await ttdl(url);
+  const items=data?.data||[];
+  if(!items.length)throw new Error('Aucun média TikTok récupérable.');
+  for(const m of items.slice(0,20)){
+    const u=m?.url;if(!u)continue;
+    const isVideo=m.type==='video'||/\.(mp4|webm|mov)(\?|$)/i.test(u);
+    await sock.sendMessage(extra.from,isVideo?{video:{url:u},mimetype:'video/mp4',caption:'🎬 *NexAI TikTok*'}:{image:{url:u},caption:'🖼️ *NexAI TikTok carousel*'},extra.from.endsWith('@g.us')?{quoted:msg}:undefined);
+  }
+}
 
-    try {
-      // 1️⃣ Sécurité anti-doublon
-      if (processedMessages.has(sessionContext.scopeKey(msg.key.id))) return;
-      processedMessages.add(sessionContext.scopeKey(msg.key.id));
-      setTimeout(() => processedMessages.delete(sessionContext.scopeKey(msg.key.id)), 5 * 60 * 1000);
+module.exports={
+  name:'tiktok',
+  aliases:['tt','ttdl','tiktokdl','tkhd','tiktokpremium'],
+  category:'📥 Téléchargements',
+  description:'Télécharge TikTok avec fiche riche NexAI, vidéo et audio.',
+  usage:`${config.prefix||'.'}tiktok <lien>`,
+  async execute(sock,msg,args,extra){
+    prune();
+    const messageKey=sessionContext.scopeKey(msg?.key?.id||crypto.randomBytes(4).toString('hex'));
+    if(processed.has(messageKey))return;
+    processed.add(messageKey);const timer=setTimeout(()=>processed.delete(messageKey),5*60*1000);timer.unref?.();
 
-      const text = args.join(' ');
+    const action=String(args?.[0]||'').toLowerCase();
+    if(action==='action'){
+      const kind=String(args?.[1]||'').toLowerCase(),token=String(args?.[2]||'');
+      const item=CACHE.get(token);
+      if(!item||Date.now()-item.createdAt>TTL)return extra.reply('⚠️ Cette fiche TikTok a expiré. Relance la commande avec le lien.');
+      if(item.chat!==extra.from||item.sender!==sender(msg))return extra.reply('🔒 Cette action appartient à une autre session utilisateur.');
+      try{
+        if(kind==='video')await sendVideo(sock,extra.from,item.videoUrl,msg);
+        else if(kind==='audio')await sendAudio(sock,extra.from,item.audioUrl,msg);
+        else return extra.reply('⚠️ Action TikTok inconnue.');
+        await sock.sendMessage(extra.from,{react:{text:'✅',key:msg.key}}).catch(()=>{});
+      }catch(e){await extra.reply(`❌ ${e.message}`);}
+      return;
+    }
 
-      if (!text) {
-        return reply(
-          `*⚠️ ${toSmallCaps('echec de l\'invocation')}*\n\n` +
-          `*┃* 🔮 *${toSmallCaps('indique un lien tiktok')}*\n` +
-          `*┃* *${toSmallCaps('pour aspirer le media')} !*\n\n` +
-          extra.phrases.footer()
-        );
+    const url=String(args?.join(' ')||'').match(/https?:\/\/\S+/)?.[0];
+    if(!url||!/tiktok\.com\//i.test(url))return extra.reply(`🎬 *NexAI TikTok*\nEnvoie un lien valide.\nExemple : ${config.prefix||'.'}tiktok https://vt.tiktok.com/...`);
+    await sock.sendMessage(extra.from,{react:{text:'⏳',key:msg.key}}).catch(()=>{});
+
+    try{
+      const result=await resolve(url);
+      if(!result?.videoUrl){
+        await carouselFallback(sock,msg,extra,url);
+        await sock.sendMessage(extra.from,{react:{text:'✅',key:msg.key}}).catch(()=>{});
+        return;
       }
 
-      const tiktokPatterns = [
-        /https?:\/\/(?:www\.)?tiktok\.com\//,
-        /https?:\/\/(?:vm\.)?tiktok\.com\//,
-        /https?:\/\/(?:vt\.)?tiktok\.com\//,
-        /https?:\/\/(?:www\.)?tiktok\.com\/@/,
-        /https?:\/\/(?:www\.)?tiktok\.com\/t\//
+      const token=crypto.randomBytes(9).toString('base64url');
+      const coverBuffer=await fetchBuffer(result.coverUrl);
+      const meta={...result.meta,coverBuffer,source:domain(url)};
+      CACHE.set(token,{...result,meta,chat:extra.from,sender:sender(msg),createdAt:Date.now()});
+
+      const image=await renderTikTokCard(meta);
+      const buttons=[
+        {text:'⬇ Download video',id:`nexui:tiktok:video:${token}`},
+        ...(result.audioUrl?[{text:'♫ Download audio',id:`nexui:tiktok:audio:${token}`}]:[])
       ];
-      const isValidUrl = tiktokPatterns.some(pattern => pattern.test(text));
-
-      if (!isValidUrl) {
-        return reply(`*❌ ${toSmallCaps('ce lien nest pas une illusion tiktok valide')} !*\n\n${extra.phrases.footer()}`);
-      }
-
-      await sock.sendMessage(chatId, { react: { text: '⏳', key: msg.key } });
-
-      try {
-        let videoUrl = null;
-        let title = null;
-        const botName = toSmallCaps(config.botName || 'THE BIG DIPPER');
-        const sourceDomain = getDomain(text);
-        const errors = [];
-
-        // ── API 1 : API personnalisée ────────────────────────────────────────
-        try {
-          const result = await APIs.getTikTokDownload(text);
-          videoUrl = result.videoUrl;
-          title = result.title;
-        } catch (apiError) {
-          errors.push(`API perso: ${apiError.message}`);
-          console.error(`[tiktok] API perso échouée: ${apiError.message}`);
-        }
-
-        // ── API 2 : TikWM avec priorité HD systématique ─────────────────────
-        if (!videoUrl) {
-          try {
-            const tikwmResponse = await axios.post(
-              'https://www.tikwm.com/api/',
-              new URLSearchParams({ url: text, hd: '1' }).toString(),
-              {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                timeout: 30000,
-              }
-            );
-            if (tikwmResponse.data && tikwmResponse.data.data) {
-              const resData = tikwmResponse.data.data;
-              // Priorité systématique à la meilleure qualité disponible
-              videoUrl = resData.hdplay || resData.play;
-              title = resData.title;
-            }
-          } catch (tikwmErr) {
-            errors.push(`TikWM: ${tikwmErr.message}`);
-            console.error('[tiktok] TikWM échoué:', tikwmErr.message);
-          }
-        }
-
-        // ── API 3 : Cobalt (api.cobalt.tools) ───────────────────────────────
-        if (!videoUrl) {
-          try {
-            const cobaltRes = await axios.post('https://api.cobalt.tools/', {
-              url: text,
-              downloadMode: 'auto',
-              videoQuality: 'max',
-              tiktokH265: false,
-            }, {
-              headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (compatible; TheBigDipper/1.0)',
-              },
-              timeout: 35000,
-            });
-            const d = cobaltRes.data;
-            if (d?.status === 'tunnel' || d?.status === 'redirect') {
-              videoUrl = d.url;
-            } else if (d?.status === 'picker' && Array.isArray(d?.picker)) {
-              const vid = d.picker.find(p => p.type === 'video') || d.picker[0];
-              videoUrl = vid?.url;
-            } else if (d?.url) {
-              videoUrl = d.url;
-            }
-            if (!videoUrl) errors.push(`Cobalt: status=${d?.status} — pas d'URL`);
-          } catch (e1) {
-            errors.push(`Cobalt: ${e1.message}`);
-            console.warn('[tiktok] Cobalt échoué:', e1.message);
-          }
-        }
-
-        // ── API 4 : SSSTik ───────────────────────────────────────────────────
-        if (!videoUrl) {
-          try {
-            const sssTikRes = await axios.post(
-              'https://ssstik.io/abc?url=dl',
-              new URLSearchParams({ id: text, locale: 'en', tt: 'YUdwY0lS' }).toString(),
-              {
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                  'Referer': 'https://ssstik.io/',
-                  'Origin': 'https://ssstik.io',
-                },
-                timeout: 30000,
-              }
-            );
-            const html = sssTikRes.data || '';
-            const match = html.match(/href="(https:\/\/[^"]*?\.mp4[^"]*?)"/i)
-                       || html.match(/href="(https:\/\/v[0-9][^"]*?)"/i);
-            if (match?.[1]) {
-              videoUrl = match[1].replace(/&amp;/g, '&');
-            } else {
-              errors.push('SSSTik: pas d\'URL dans le HTML');
-            }
-          } catch (e2) {
-            errors.push(`SSSTik: ${e2.message}`);
-            console.warn('[tiktok] SSSTik échoué:', e2.message);
-          }
-        }
-
-        // ── API 5 : SnapTik ───────────────────────────────────────────────────
-        if (!videoUrl) {
-          try {
-            const snapRes = await axios.post(
-              'https://snaptik.app/abc2.php',
-              new URLSearchParams({ url: text }).toString(),
-              {
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                  'Referer': 'https://snaptik.app/',
-                },
-                timeout: 25000,
-              }
-            );
-            const snapHtml = snapRes.data || '';
-            const snapMatch = snapHtml.match(/href="(https:\/\/[^"]*?tiktok[^"]*?\.(mp4|m4v)[^"]*?)"/i);
-            if (snapMatch?.[1]) {
-              videoUrl = snapMatch[1].replace(/&amp;/g, '&');
-            } else {
-              errors.push('SnapTik: pas d\'URL dans le HTML');
-            }
-          } catch (e3) {
-            errors.push(`SnapTik: ${e3.message}`);
-            console.warn('[tiktok] SnapTik échoué:', e3.message);
-          }
-        }
-
-        // ── API 6 : ttdl (scraper Ruhend) — géré séparément pour les carrousels ─
-        if (!videoUrl) {
-          try {
-            let downloadData = await ttdl(text);
-            if (downloadData && downloadData.data && downloadData.data.length > 0) {
-              const mediaData = downloadData.data;
-
-              for (let i = 0; i < Math.min(20, mediaData.length); i++) {
-                const media = mediaData[i];
-                const mediaUrl = media.url;
-                const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(mediaUrl) || media.type === 'video';
-
-                let mediaCaption = `*╭━≪• 🎬 ᴀsᴘɪʀᴀᴛɪᴏɴ ʀᴇ́ᴜssɪᴇ •≫╾╮*\n` +
-                                   `*┃* 🔮 *${toSmallCaps('extrait par')} :* ${botName}\n` +
-                                   `*┃* 🔗 *${toSmallCaps('source')} :* ${sourceDomain}\n`;
-
-                if (downloadData.title) {
-                  mediaCaption += `*┃* 🔖 *${toSmallCaps('titre')} :* ${toSmallCaps(downloadData.title)}\n\n`;
-                } else {
-                  mediaCaption += `\n`;
-                }
-                mediaCaption += extra.phrases.footer();
-
-                if (isVideo) {
-                  await sock.sendMessage(chatId, {
-                    video: { url: mediaUrl }, mimetype: 'video/mp4', caption: mediaCaption
-                  }, { quoted: msg });
-                } else {
-                  await sock.sendMessage(chatId, {
-                    image: { url: mediaUrl }, caption: mediaCaption
-                  }, { quoted: msg });
-                }
-              }
-              await sock.sendMessage(chatId, { react: { text: '✅', key: msg.key } });
-              return;
-            }
-          } catch (ttdlError) {
-            errors.push(`ttdl: ${ttdlError.message}`);
-            console.error('[tiktok] ttdl échoué:', ttdlError.message);
-          }
-        }
-
-        // ── Aucune source n'a fonctionné ─────────────────────────────────────
-        if (!videoUrl) {
-          console.error('[tiktok] Toutes les sources ont échoué:', errors);
-          await sock.sendMessage(chatId, { react: { text: '❌', key: msg.key } });
-          return reply(`*❌ ${toSmallCaps('toutes les sources dinvocation ont echoue pour cette illusion')} !*\n\n${extra.phrases.footer()}`);
-        }
-
-        // ── Téléchargement + validation + envoi ──────────────────────────────
-        let caption = `*╭╼━━━≪• 🎬 ᴀsᴘɪʀᴀᴛɪᴏɴ ʀᴇ́ᴜssɪᴇ •≫━━━╾╮*\n` +
-                      `*┃* 🔮 *${toSmallCaps('extrait par')} :* ${botName}\n` +
-                      `*┃* 🔗 *${toSmallCaps('source')} :* ${sourceDomain}\n`;
-        if (title) {
-          caption += `*┃* 🔖 *${toSmallCaps('titre')} :* ${toSmallCaps(title)}\n\n`;
-        } else {
-          caption += `\n`;
-        }
-        caption += extra.phrases.footer();
-
-        try {
-          const videoResponse = await axios.get(videoUrl, {
-            responseType: 'arraybuffer',
-            timeout: 120000, // aligné sur la valeur la plus généreuse (tiktokhd)
-            maxContentLength: 100 * 1024 * 1024,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-              'Accept': 'video/mp4,video/*,*/*;q=0.9',
-              'Referer': 'https://www.tiktok.com/'
-            }
-          });
-
-          const videoBuffer = Buffer.from(videoResponse.data);
-
-          // Validation de taille minimale (détecte une URL expirée/invalide)
-          if (videoBuffer.length < 5000) {
-            throw new Error(`Fichier trop petit (${videoBuffer.length} bytes) — URL invalide ou expirée`);
-          }
-
-          await sock.sendMessage(chatId, {
-            video: videoBuffer, mimetype: 'video/mp4', caption: caption
-          }, { quoted: msg });
-          await sock.sendMessage(chatId, { react: { text: '✅', key: msg.key } });
-          return;
-        } catch (downloadError) {
-          console.error(`[tiktok] Échec téléchargement buffer: ${downloadError.message}`);
-          // Repli : envoi par URL directe
-          try {
-            await sock.sendMessage(chatId, {
-              video: { url: videoUrl }, mimetype: 'video/mp4', caption: caption
-            }, { quoted: msg });
-            await sock.sendMessage(chatId, { react: { text: '✅', key: msg.key } });
-            return;
-          } catch (urlError) {
-            console.error(`[tiktok] Méthode URL directe également échouée: ${urlError.message}`);
-          }
-        }
-
-        return reply(`*❌ ${toSmallCaps('toutes les sources dinvocation ont echoue pour cette illusion')} !*\n\n${extra.phrases.footer()}`);
-
-      } catch (error) {
-        console.error('[tiktok] Erreur:', error);
-        await reply(`*❌ ${toSmallCaps('loracle a echoue a sonder ce lien tiktok')} !*\n\n${extra.phrases.footer()}`);
-      }
-    } catch (error) {
-      console.error('[tiktok] Erreur commande:', error);
-      await reply(`*❌ ${toSmallCaps('une singularite est survenue lors du traitement')}...*\n\n${extra.phrases.footer()}`);
+      await sendRichCard({
+        sock,jid:extra.from,imageBuffer:image,
+        caption:`🎬 *NexAI TikTok Download*\n${meta.author||'TikTok Creator'} • média prêt`,
+        footer:'NEXAI • RICH MEDIA',
+        quoted:extra.from.endsWith('@g.us')?msg:null,
+        buttons,
+        fallbackLines:[
+          `${config.prefix||'.'}tiktok action video ${token}`,
+          ...(result.audioUrl?[`${config.prefix||'.'}tiktok action audio ${token}`]:[])
+        ]
+      });
+      await sock.sendMessage(extra.from,{react:{text:'✅',key:msg.key}}).catch(()=>{});
+    }catch(e){
+      console.error('[nexai:tiktok]',e.message);
+      await sock.sendMessage(extra.from,{react:{text:'❌',key:msg.key}}).catch(()=>{});
+      await extra.reply('❌ Impossible de préparer ce TikTok pour le moment.');
     }
   }
 };
