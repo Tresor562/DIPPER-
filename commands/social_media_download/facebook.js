@@ -13,6 +13,79 @@ const config = require('../../config');
 
 const processedMessages = new Set();
 
+const MAX_VIDEO_BYTES = Number(process.env.FACEBOOK_VIDEO_MAX_BYTES || 45 * 1024 * 1024);
+const RESOLVE_TIMEOUT_MS = Number(process.env.FACEBOOK_RESOLVE_TIMEOUT_MS || 60000);
+const DOWNLOAD_TIMEOUT_MS = Number(process.env.FACEBOOK_DOWNLOAD_TIMEOUT_MS || 90000);
+const SEND_TIMEOUT_MS = Number(process.env.FACEBOOK_SEND_TIMEOUT_MS || 60000);
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} expiré après ${Math.ceil(ms / 1000)} s`)), ms);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function fetchFacebookVideo(url) {
+  if (!url) throw new Error('URL vidéo Facebook absente.');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  timer.unref?.();
+
+  try {
+    const res = await axios.get(url, {
+      responseType: 'stream',
+      timeout: Math.min(DOWNLOAD_TIMEOUT_MS, 45000),
+      signal: controller.signal,
+      maxRedirects: 6,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+      validateStatus: status => status >= 200 && status < 400,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+        'Accept': 'video/*,application/octet-stream;q=0.9,*/*;q=0.8',
+        'Accept-Encoding': 'identity',
+        'Referer': 'https://www.facebook.com/',
+      },
+    });
+
+    const declared = Number(res.headers?.['content-length'] || 0);
+    if (declared && declared > MAX_VIDEO_BYTES) {
+      try { res.data.destroy?.(); } catch (_) {}
+      throw new Error(`Vidéo Facebook trop volumineuse (${Math.ceil(declared / 1024 / 1024)} Mo ; limite ${Math.ceil(MAX_VIDEO_BYTES / 1024 / 1024)} Mo)`);
+    }
+
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of res.data) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.length;
+      if (bytes > MAX_VIDEO_BYTES) {
+        try { res.data.destroy?.(); } catch (_) {}
+        throw new Error(`Vidéo Facebook trop volumineuse (limite ${Math.ceil(MAX_VIDEO_BYTES / 1024 / 1024)} Mo)`);
+      }
+      chunks.push(buffer);
+    }
+
+    if (bytes < 5000) throw new Error('La source Facebook a renvoyé une vidéo vide ou invalide.');
+
+    return {
+      buffer: Buffer.concat(chunks, bytes),
+      contentType: String(res.headers?.['content-type'] || 'video/mp4').split(';')[0],
+      bytes,
+    };
+  } catch (err) {
+    if (controller.signal.aborted) throw new Error('Téléchargement Facebook expiré.');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function toSC(text) {
   const n = 'abcdefghijklmnopqrstuvwxyz0123456789';
   const s = 'ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ0123456789';
@@ -215,7 +288,7 @@ module.exports = {
       // ── Téléchargement ────────────────────────────────────
       let videoData;
       try {
-        videoData = await downloadFacebook(url);
+        videoData = await withTimeout(downloadFacebook(url), RESOLVE_TIMEOUT_MS, 'Résolution Facebook');
       } catch (dlErr) {
         try { await sock.sendMessage(from, { react: { text: '❌', key: msg.key } }); } catch (_) {}
         return reply(
@@ -244,37 +317,33 @@ module.exports = {
         `╰━━━━━━━━━━━━━━━━╯\n\n` +
         phrases.footer();
 
-      // ── Envoi — URL directe puis fallback buffer ──────────
-      try {
-        await sock.sendMessage(from, {
-          video   : { url: videoData.videoUrl },
-          mimetype: 'video/mp4',
+      // ── Téléchargement serveur puis envoi WhatsApp borné ───
+      // Ne jamais laisser Baileys télécharger lui-même une URL distante :
+      // si le CDN Facebook ralentit, sendMessage peut rester bloqué sans fin.
+      const media = await withTimeout(
+        fetchFacebookVideo(videoData.videoUrl),
+        DOWNLOAD_TIMEOUT_MS + 5000,
+        'Téléchargement Facebook'
+      );
+
+      await withTimeout(
+        sock.sendMessage(from, {
+          video: media.buffer,
+          mimetype: media.contentType.startsWith('video/') ? media.contentType : 'video/mp4',
+          fileName: 'NexAI-Facebook.mp4',
           caption,
-        }, { quoted: msg });
+        }, { quoted: msg }),
+        SEND_TIMEOUT_MS,
+        'Envoi WhatsApp Facebook'
+      );
 
-        try { await sock.sendMessage(from, { react: { text: '✅', key: msg.key } }); } catch (_) {}
-
-      } catch (_) {
-        // Fallback buffer
-        const vRes = await axios.get(videoData.videoUrl, {
-          responseType: 'arraybuffer',
-          timeout: 90000,
-          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://facebook.com' },
-        });
-        await sock.sendMessage(from, {
-          video   : Buffer.from(vRes.data),
-          mimetype: 'video/mp4',
-          caption,
-        }, { quoted: msg });
-
-        try { await sock.sendMessage(from, { react: { text: '✅', key: msg.key } }); } catch (_) {}
-      }
+      try { await sock.sendMessage(from, { react: { text: '✅', key: msg.key } }); } catch (_) {}
 
     } catch (err) {
       console.error('[facebook] erreur générale:', err.message);
       try { await sock.sendMessage(from, { react: { text: '❌', key: msg.key } }); } catch (_) {}
       await reply(
-        `*❌ ${toSC('une singularite est survenue')}...*\n\n${phrases.footer()}`
+        `*❌ ${toSC('le telechargement facebook a echoue')}*\n${String(err?.message || err).slice(0, 300)}\n\n${phrases.footer()}`
       );
     }
   }
