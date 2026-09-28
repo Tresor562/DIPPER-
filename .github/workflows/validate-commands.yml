@@ -81,7 +81,7 @@ jobs:
         run: node --test tests/response-style.test.js
       - name: Run WhatsApp stability hardening tests
         run: |
-          node --test tests/stability-hardening.test.js tests/channel-auto-follow-delay.test.js tests/pairing-reconnect.test.js
+          node --test tests/stability-hardening.test.js tests/channel-auto-follow-delay.test.js tests/pairing-reconnect.test.js tests/message-execution-guard.test.js
 
       - name: Validate all commands
         if: always()
