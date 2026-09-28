@@ -36,6 +36,7 @@
 const config   = require('./config');
 const database = require('./database');
 const sessionContext = require('./utils/sessionContext');
+const { claimMessageExecution } = require('./utils/messageExecutionGuard');
 const { loadCommands }         = require('./utils/commandLoader');
 const { addMessage }           = require('./utils/groupstats');
 const { isAllowedUser }        = require('./utils/jidHelpers');
@@ -926,6 +927,18 @@ const handleMessage = async (sock, msg) => {
     if (!msg.message) return;
     const from = msg.key.remoteJid;
     if (isSystemJid(from)) return;
+
+    // [COMMAND EXECUTION DEDUP] Garde commun à TOUS les sockets du processus.
+    // Le même message peut arriver par le socket legacy ET le SessionManager
+    // lorsque le compte principal est chargé par les deux chemins. Les Maps
+    // anti-doublon locales ne se voient pas entre elles ; ce verrou commun
+    // garantit qu'un message WhatsApp n'entre qu'une seule fois dans le moteur.
+    if (!claimMessageExecution(sock, msg)) {
+      if (process.env.WA_DEDUP_DEBUG === '1') {
+        console.log(`[handler] ↪️ doublon ignoré id=${msg.key?.id || '?'} jid=${from || '?'}`);
+      }
+      return;
+    }
 
     rememberConversation(sock, from);
 
