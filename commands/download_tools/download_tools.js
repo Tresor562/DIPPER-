@@ -46,10 +46,10 @@ async function sendDownloaded(sock, msg, extra, rawUrl, hint) {
     await reply('📥 *Téléchargement en cours…*');
 
     const direct = await withTimeout(engine.resolveUrl(rawUrl, hint), 20000, 'Résolution du lien');
-    const got = await engine.download(direct, {
+    const got = await withTimeout(engine.download(direct, {
       maxBytes: Number(process.env.DOWNLOAD_MAX_BYTES || 45 * 1024 * 1024),
       totalTimeoutMs: Number(process.env.DOWNLOAD_TOTAL_TIMEOUT_MS || 120000),
-    });
+    }), Number(process.env.DOWNLOAD_TOTAL_TIMEOUT_MS || 120000) + 5000, 'Téléchargement');
     file = got.file;
 
     const data = fs.readFileSync(file);
