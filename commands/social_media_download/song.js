@@ -17,10 +17,16 @@ const yts = require('yt-search');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const ytdl = require('@distube/ytdl-core');
 const APIs = require('../../utils/api');
 const { toAudio } = require('../../utils/converter');
 const config = require('../../config.js');
 const tempManager = require('../../utils/tempManager');
+
+const MAX_AUDIO_BYTES = Number(process.env.SONG_AUDIO_MAX_BYTES || 35 * 1024 * 1024);
+const YTDL_INFO_TIMEOUT_MS = Number(process.env.SONG_YTDL_INFO_TIMEOUT_MS || 25000);
+const DOWNLOAD_TIMEOUT_MS = Number(process.env.SONG_DOWNLOAD_TIMEOUT_MS || 90000);
+const SEND_TIMEOUT_MS = Number(process.env.SONG_SEND_TIMEOUT_MS || 60000);
 
 const AXIOS_DEFAULTS = {
   timeout: 60000,
@@ -30,14 +36,17 @@ const AXIOS_DEFAULTS = {
   }
 };
 
-// Timeout global : protège contre un hang infini
-const withTimeout = (promise, ms, label) =>
-  Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`[TIMEOUT] ${label} dépasse ${ms}ms`)), ms)
-    )
-  ]);
+// Timeout global : protège contre un hang infini et libère toujours son timer.
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`[TIMEOUT] ${label} dépasse ${ms}ms`)), ms);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 // Style Small Caps
 function toSmallCaps(text) {
@@ -72,6 +81,70 @@ function safeFooter(extra) {
 // Valider qu'une URL est bien YouTube
 function isYouTubeUrl(url) {
   return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url);
+}
+
+async function streamToBuffer(stream, maxBytes = MAX_AUDIO_BYTES, timeoutMs = DOWNLOAD_TIMEOUT_MS) {
+  const chunks = [];
+  let bytes = 0;
+  let timer;
+
+  try {
+    const consume = (async () => {
+      for await (const chunk of stream) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytes += buffer.length;
+        if (bytes > maxBytes) {
+          try { stream.destroy?.(); } catch (_) {}
+          throw new Error(`Audio trop volumineux (limite ${Math.ceil(maxBytes / 1024 / 1024)} Mo)`);
+        }
+        chunks.push(buffer);
+      }
+      if (bytes < 1024) throw new Error('Le flux audio téléchargé est vide ou invalide.');
+      return Buffer.concat(chunks, bytes);
+    })();
+
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try { stream.destroy?.(); } catch (_) {}
+        reject(new Error(`[TIMEOUT] téléchargement audio dépasse ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
+    });
+
+    return await Promise.race([consume, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function downloadAudioWithYtdl(url) {
+  const info = await withTimeout(ytdl.getInfo(url), YTDL_INFO_TIMEOUT_MS, 'analyse YouTube locale');
+  const formats = (info.formats || [])
+    .filter(format => format.hasAudio && !format.hasVideo)
+    .sort((a, b) => {
+      const aMp4 = a.container === 'mp4' ? 1 : 0;
+      const bMp4 = b.container === 'mp4' ? 1 : 0;
+      if (aMp4 !== bMp4) return bMp4 - aMp4;
+      return Number(b.audioBitrate || b.bitrate || 0) - Number(a.audioBitrate || a.bitrate || 0);
+    });
+
+  const format = formats.find(candidate => {
+    const size = Number(candidate.contentLength || 0);
+    return !size || size <= MAX_AUDIO_BYTES;
+  });
+  if (!format) throw new Error('Aucun format audio YouTube compatible avec la limite de taille.');
+
+  const stream = ytdl.downloadFromInfo(info, {
+    format,
+    highWaterMark: 1 << 25,
+  });
+  const buffer = await streamToBuffer(stream);
+
+  return {
+    buffer,
+    title: info.videoDetails?.title || 'song',
+    source: 'ytdl-local',
+  };
 }
 
 module.exports = {
@@ -142,29 +215,46 @@ module.exports = {
       const botName     = toSmallCaps(config.botName || 'ɢʜᴏsᴛɢ-x');
       const sourceDomain = getDomain(video.url || '');
 
-      // Affichage info avant téléchargement
-      await sock.sendMessage(chatId, {
-        image: { url: video.thumbnail || 'https://cdn-icons-png.flaticon.com/512/1384/1384060.png' },
-        caption:
-          `*╭━≪• 🎬 ᴀsᴘɪʀᴀᴛɪᴏɴ ʀᴇ́ᴜssɪᴇ •≫╾╮*\n` +
-          `*┃* 🔮 *${toSmallCaps('extrait par')} :* ${botName}\n` +
-          `*┃* 🔗 *${toSmallCaps('source')} :* ${sourceDomain}\n` +
-          `*┃* 🔖 *${toSmallCaps('titre')} :* ${toSmallCaps(video.title || 'Inconnu')}\n` +
-          `*┃* ⏱️ *${toSmallCaps('duree')} :* ${toSmallCaps(video.timestamp || 'Inconnue')}\n\n` +
-          safeFooter(extra)
-      }, { quoted: msg });
+      // Affichage info avant téléchargement. Une miniature distante ne doit
+      // jamais bloquer le téléchargement principal.
+      try {
+        await withTimeout(sock.sendMessage(chatId, {
+          image: { url: video.thumbnail || 'https://cdn-icons-png.flaticon.com/512/1384/1384060.png' },
+          caption:
+            `*╭━≪• 🎬 ᴀsᴘɪʀᴀᴛɪᴏɴ ʀᴇ́ᴜssɪᴇ •≫╾╮*\n` +
+            `*┃* 🔮 *${toSmallCaps('extrait par')} :* ${botName}\n` +
+            `*┃* 🔗 *${toSmallCaps('source')} :* ${sourceDomain}\n` +
+            `*┃* 🔖 *${toSmallCaps('titre')} :* ${toSmallCaps(video.title || 'Inconnu')}\n` +
+            `*┃* ⏱️ *${toSmallCaps('duree')} :* ${toSmallCaps(video.timestamp || 'Inconnue')}\n\n` +
+            safeFooter(extra)
+        }, { quoted: msg }), 20000, 'envoi de la fiche audio');
+      } catch (cardErr) {
+        console.warn('[SONG] Fiche/miniature ignorée:', cardErr?.message || cardErr);
+      }
 
-      await sock.sendMessage(chatId, { react: { text: '⏳', key: msg.key } });
+      await sock.sendMessage(chatId, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
       // === CHAÎNE DE TÉLÉCHARGEMENT ===
       let audioData;
       let audioBuffer;
       let downloadSuccess = false;
 
-      // [FIX 7] Si c'est une recherche texte (pas URL), on tente Izumi query en priorité
-      const isDirectUrl = isYouTubeUrl(video.url || '');
+      // Source locale d'abord : elle évite de dépendre entièrement des APIs
+      // tierces. Si YouTube refuse cette méthode, la cascade API reste active.
+      try {
+        const local = await downloadAudioWithYtdl(video.url);
+        audioBuffer = local.buffer;
+        audioData = { title: local.title, source: local.source };
+        downloadSuccess = true;
+        console.log(`[SONG] ✅ ytdl local OK — ${audioBuffer.length} octets`);
+      } catch (localErr) {
+        console.warn('[SONG] ytdl local échoué:', localErr?.message || localErr);
+      }
 
-      const apiMethods = isDirectUrl
+      // Pour une recherche texte, IzumiQuery reste prioritaire côté fallback API.
+      const inputWasUrl = isYouTubeUrl(text);
+
+      const apiMethods = inputWasUrl
         ? [
             { name: 'EliteProTech', method: () => APIs.getEliteProTechDownloadByUrl(video.url) },
             { name: 'Yupra',        method: () => APIs.getYupraDownloadByUrl(video.url)        },
@@ -180,6 +270,7 @@ module.exports = {
           ];
 
       for (const apiMethod of apiMethods) {
+        if (downloadSuccess) break;
         console.log(`[SONG] 🌐 Tentative API : ${apiMethod.name}`);
         try {
           audioData = await withTimeout(apiMethod.method(), 30000, `API ${apiMethod.name}`);
@@ -198,8 +289,8 @@ module.exports = {
               axios.get(audioUrl, {
                 responseType: 'arraybuffer',
                 timeout: 90000,
-                maxContentLength: Infinity,
-                maxBodyLength: Infinity,
+                maxContentLength: MAX_AUDIO_BYTES,
+                maxBodyLength: MAX_AUDIO_BYTES,
                 decompress: true,
                 validateStatus: s => s >= 200 && s < 400,
                 headers: {
@@ -212,6 +303,9 @@ module.exports = {
               'téléchargement arraybuffer'
             );
             audioBuffer = Buffer.from(audioResponse.data);
+            if (audioBuffer.length > MAX_AUDIO_BYTES) {
+              throw new Error(`Audio trop volumineux (limite ${Math.ceil(MAX_AUDIO_BYTES / 1024 / 1024)} Mo)`);
+            }
             if (audioBuffer?.length > 0) {
               console.log(`[SONG] ✅ ${apiMethod.name} arraybuffer OK — ${audioBuffer.length} octets`);
               downloadSuccess = true;
@@ -244,13 +338,11 @@ module.exports = {
                 90000,
                 'téléchargement stream'
               );
-              const chunks = [];
-              await new Promise((resolve, reject) => {
-                audioResponse.data.on('data',  c  => chunks.push(c));
-                audioResponse.data.on('end',   resolve);
-                audioResponse.data.on('error', reject);
-              });
-              audioBuffer = Buffer.concat(chunks);
+              audioBuffer = await streamToBuffer(
+                audioResponse.data,
+                MAX_AUDIO_BYTES,
+                DOWNLOAD_TIMEOUT_MS
+              );
               if (audioBuffer?.length > 0) {
                 console.log(`[SONG] ✅ ${apiMethod.name} stream OK — ${audioBuffer.length} octets`);
                 downloadSuccess = true;
@@ -294,6 +386,8 @@ module.exports = {
         fileExtension = 'ogg';
       } else if (audioBuffer.toString('ascii', 0, 4) === 'RIFF') {
         fileExtension = 'wav';
+      } else if (hexSignature.startsWith('1a45dfa3')) {
+        fileExtension = 'webm';
       }
 
       console.log(`[SONG] 📄 Format détecté : ${fileExtension}`);
@@ -320,12 +414,12 @@ module.exports = {
       const fileName = ((audioData?.title || video.title || 'song') + '.mp3').replace(/[^\w\s\-\.]/g, '');
       console.log(`[SONG] 📤 Envoi audio WhatsApp : ${fileName}`);
 
-      await sock.sendMessage(chatId, {
+      await withTimeout(sock.sendMessage(chatId, {
         audio: finalBuffer,
         mimetype: finalMimetype,
         fileName,
         ptt: false
-      }, { quoted: msg });
+      }, { quoted: msg }), SEND_TIMEOUT_MS, 'envoi audio WhatsApp');
 
       console.log('[SONG] ✅ Audio envoyé avec succès');
 
@@ -351,6 +445,7 @@ module.exports = {
 
     } catch (err) {
       console.error('[SONG] 💥 Erreur fatale:', err.message || err);
+      await sock.sendMessage(chatId, { react: { text: '❌', key: msg.key } }).catch(() => {});
 
       let errorMessage = `*❌ ${toSmallCaps("loracle a echoue a aspirer ce cantique")} !*`;
 
