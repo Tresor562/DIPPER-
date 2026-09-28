@@ -93,8 +93,8 @@ jobs:
         run: npm run validate:commands
 
   publish-push-transport:
-    name: Optional OIDC push transport
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HOT_PUSH_TRANSPORT_ENABLED == 'true'
+    name: OIDC push transport
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10

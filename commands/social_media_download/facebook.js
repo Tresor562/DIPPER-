@@ -1,3 +1,4 @@
+// HOT_DEPLOY_MARKER: downloader-reliability-live-v3
 /**
  * Facebook Downloader - 𝐃𝐚𝐫𝐤 Edition
  * APIs JSON fiables (pas de scraping HTML) :
