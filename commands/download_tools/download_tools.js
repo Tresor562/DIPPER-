@@ -17,30 +17,66 @@ function errText(e) {
   return `❌ *Download Tools*\n${m.slice(0, 700)}`;
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} expiré après ${Math.ceil(ms / 1000)} s.`)), ms);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function mediaKind(contentType, fileName) {
+  const mime = String(contentType || '').toLowerCase();
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  if (mime.startsWith('image/') || ['.jpg','.jpeg','.png','.webp','.gif'].includes(ext)) return 'image';
+  if (mime.startsWith('video/') || ['.mp4','.mov','.m4v','.webm','.mkv'].includes(ext)) return 'video';
+  if (mime.startsWith('audio/') || ['.mp3','.m4a','.aac','.ogg','.opus','.wav'].includes(ext)) return 'audio';
+  return 'document';
+}
+
 async function sendDownloaded(sock, msg, extra, rawUrl, hint) {
   const { reply, from } = extra;
   if (!rawUrl) return reply(`⚠️ Lien requis. Exemple : .${hint || 'download'} https://...`);
+
   let file;
   try {
     await reply('📥 *Téléchargement en cours…*');
-    const direct = await engine.resolveUrl(rawUrl, hint);
-    const got = await engine.download(direct);
+
+    const direct = await withTimeout(engine.resolveUrl(rawUrl, hint), 20000, 'Résolution du lien');
+    const got = await engine.download(direct, {
+      maxBytes: Number(process.env.DOWNLOAD_MAX_BYTES || 45 * 1024 * 1024),
+      totalTimeoutMs: Number(process.env.DOWNLOAD_TOTAL_TIMEOUT_MS || 120000),
+    });
     file = got.file;
-    const lower = String(got.contentType || '').toLowerCase();
+
     const data = fs.readFileSync(file);
+    if (!data.length) throw new Error('Le fichier téléchargé est vide.');
+
     const opts = from?.endsWith('@g.us') ? { quoted: msg } : undefined;
-    if (lower.startsWith('image/') && got.bytes <= 15 * 1024 * 1024) {
-      await sock.sendMessage(from, { image: data, caption: `📥 *${got.fileName}*\n💾 ${engine.human(got.bytes)}` }, opts);
-    } else if (lower.startsWith('video/') && got.bytes <= 30 * 1024 * 1024) {
-      await sock.sendMessage(from, { video: data, mimetype: got.contentType, fileName: got.fileName, caption: `📥 *${got.fileName}*\n💾 ${engine.human(got.bytes)}` }, opts);
-    } else if (lower.startsWith('audio/') && got.bytes <= 30 * 1024 * 1024) {
-      await sock.sendMessage(from, { audio: data, mimetype: got.contentType, fileName: got.fileName, ptt: false }, opts);
+    const kind = mediaKind(got.contentType, got.fileName);
+    const caption = `📥 *${got.fileName}*\n💾 ${engine.human(got.bytes)}`;
+    let payload;
+
+    if (kind === 'image' && got.bytes <= 15 * 1024 * 1024) {
+      payload = { image: data, caption };
+    } else if (kind === 'video' && got.bytes <= 45 * 1024 * 1024) {
+      payload = { video: data, mimetype: got.contentType?.startsWith('video/') ? got.contentType : 'video/mp4', fileName: got.fileName, caption };
+    } else if (kind === 'audio' && got.bytes <= 45 * 1024 * 1024) {
+      payload = { audio: data, mimetype: got.contentType?.startsWith('audio/') ? got.contentType : 'audio/mpeg', fileName: got.fileName, ptt: false };
     } else {
-      await sock.sendMessage(from, { document: data, mimetype: got.contentType || 'application/octet-stream', fileName: got.fileName, caption: `📥 *Téléchargé par THE BIG DIPPER*\n💾 ${engine.human(got.bytes)}` }, opts);
+      payload = { document: data, mimetype: got.contentType || 'application/octet-stream', fileName: got.fileName, caption: `📥 *Téléchargé par THE BIG DIPPER*\n💾 ${engine.human(got.bytes)}` };
     }
+
+    await withTimeout(sock.sendMessage(from, payload, opts), 60000, 'Envoi WhatsApp');
   } catch (e) {
-    await reply(errText(e));
-  } finally { engine.cleanup(file); }
+    console.error('[download-tools]', e?.stack || e?.message || e);
+    await reply(errText(e)).catch(() => {});
+  } finally {
+    engine.cleanup(file);
+  }
 }
 
 function hostCommand(name, hint, description, aliases = []) {
