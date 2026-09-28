@@ -192,7 +192,7 @@ async function downloadWithApis(url) {
 
 module.exports = {
   name: 'video',
-  aliases: ['illusions_youtube', 'ytvideo', 'ytv', 'ytmp4', 'ytvid', 'illusion_youtube', 'dlyoutube', 'yt'],
+  aliases: ['illusions_youtube', 'ytvideo', 'ytv', 'ytmp4', 'ytvid', 'illusion_youtube', 'dlyoutube'],
   category: '📥 Téléchargements',
   description: 'Télécharge une vidéo YouTube de façon fiable.',
   usage: `${config.prefix || '.'}video [nom ou lien youtube]`,
