@@ -11,6 +11,7 @@ const cheerio = require('cheerio');
 
 const MAX_BYTES = Number(process.env.DOWNLOAD_MAX_BYTES || 45 * 1024 * 1024);
 const TIMEOUT_MS = Number(process.env.DOWNLOAD_TIMEOUT_MS || 30000);
+const TOTAL_TIMEOUT_MS = Number(process.env.DOWNLOAD_TOTAL_TIMEOUT_MS || 120000);
 const USER_AGENT = 'Mozilla/5.0 (compatible; THE_BIG_DIPPER/1.0; WhatsApp file utility)';
 
 function tmp(name = 'file.bin') {
@@ -63,7 +64,8 @@ async function requestFollowingPublicRedirects(url, options = {}) {
       url: current,
       method: options.method || 'GET',
       responseType: options.responseType || 'stream',
-      timeout: TIMEOUT_MS,
+      timeout: Number(options.timeoutMs || TIMEOUT_MS),
+      signal: options.signal,
       maxRedirects: 0,
       validateStatus: s => s >= 200 && s < 400,
       headers: { 'User-Agent': USER_AGENT, ...(options.headers || {}) },
@@ -104,26 +106,68 @@ async function headInfo(url) {
 
 async function download(url, opts = {}) {
   const maxBytes = Number(opts.maxBytes || MAX_BYTES);
-  const { res, finalUrl } = await requestFollowingPublicRedirects(url, { responseType: 'stream' });
-  const declared = Number(res.headers['content-length'] || 0);
-  if (declared && declared > maxBytes) { try { res.data.destroy(); } catch (_) {} throw new Error(`Fichier trop volumineux (${Math.ceil(declared/1024/1024)} Mo ; limite ${Math.ceil(maxBytes/1024/1024)} Mo).`); }
-  const fileName = opts.fileName || fileNameFromHeaders(finalUrl, res.headers);
-  const file = tmp(fileName);
-  const out = fs.createWriteStream(file);
-  let bytes = 0;
+  const totalTimeoutMs = Number(opts.totalTimeoutMs || TOTAL_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Téléchargement expiré après ${Math.ceil(totalTimeoutMs/1000)} s.`)), totalTimeoutMs);
+  timer.unref?.();
+
+  let file;
   try {
-    for await (const chunk of res.data) {
-      bytes += chunk.length;
-      if (bytes > maxBytes) throw new Error(`Téléchargement interrompu : limite ${Math.ceil(maxBytes/1024/1024)} Mo dépassée.`);
-      if (!out.write(chunk)) await new Promise(resolve => out.once('drain', resolve));
+    const { res, finalUrl } = await requestFollowingPublicRedirects(url, {
+      responseType: 'stream',
+      signal: controller.signal,
+      timeoutMs: Math.min(TIMEOUT_MS, totalTimeoutMs),
+    });
+    const declared = Number(res.headers['content-length'] || 0);
+    if (declared && declared > maxBytes) {
+      try { res.data.destroy(); } catch (_) {}
+      throw new Error(`Fichier trop volumineux (${Math.ceil(declared/1024/1024)} Mo ; limite ${Math.ceil(maxBytes/1024/1024)} Mo).`);
     }
-    await new Promise((resolve, reject) => out.end(err => err ? reject(err) : resolve()));
+
+    const fileName = opts.fileName || fileNameFromHeaders(finalUrl, res.headers);
+    file = tmp(fileName);
+    const out = fs.createWriteStream(file);
+    let bytes = 0;
+
+    try {
+      for await (const chunk of res.data) {
+        bytes += chunk.length;
+        if (bytes > maxBytes) {
+          try { res.data.destroy(); } catch (_) {}
+          throw new Error(`Téléchargement interrompu : limite ${Math.ceil(maxBytes/1024/1024)} Mo dépassée.`);
+        }
+        if (!out.write(chunk)) await new Promise(resolve => out.once('drain', resolve));
+      }
+      await new Promise((resolve, reject) => out.end(err => err ? reject(err) : resolve()));
+    } catch (e) {
+      out.destroy();
+      try { fs.unlinkSync(file); } catch (_) {}
+      file = null;
+      if (controller.signal.aborted) throw new Error(`Téléchargement expiré après ${Math.ceil(totalTimeoutMs/1000)} s.`);
+      throw e;
+    }
+
+    if (!bytes) {
+      try { fs.unlinkSync(file); } catch (_) {}
+      file = null;
+      throw new Error('Le serveur distant a renvoyé un fichier vide.');
+    }
+
+    return {
+      file,
+      fileName,
+      bytes,
+      finalUrl,
+      contentType: String(res.headers['content-type'] || 'application/octet-stream').split(';')[0]
+    };
   } catch (e) {
-    out.destroy();
-    try { fs.unlinkSync(file); } catch (_) {}
+    if (controller.signal.aborted && !/expir/i.test(String(e?.message || ''))) {
+      throw new Error(`Téléchargement expiré après ${Math.ceil(totalTimeoutMs/1000)} s.`);
+    }
     throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return { file, fileName, bytes, finalUrl, contentType: String(res.headers['content-type'] || 'application/octet-stream').split(';')[0] };
 }
 
 async function resolveMediafire(url) {
@@ -198,4 +242,4 @@ async function pypiInfo(name) {
 function cleanup(...files) { for (const f of files.flat().filter(Boolean)) { try { fs.unlinkSync(f); } catch (_) {} } }
 function human(bytes) { const b=Number(bytes)||0; if(b<1024)return `${b} o`; if(b<1048576)return `${(b/1024).toFixed(1)} Ko`; return `${(b/1048576).toFixed(2)} Mo`; }
 
-module.exports = { MAX_BYTES, assertPublicUrl, headInfo, download, resolveUrl, resolveMediafire, githubRepoInfo, githubReleases, npmInfo, pypiInfo, cleanup, human };
+module.exports = { MAX_BYTES, TIMEOUT_MS, TOTAL_TIMEOUT_MS, assertPublicUrl, headInfo, download, resolveUrl, resolveMediafire, githubRepoInfo, githubReleases, npmInfo, pypiInfo, cleanup, human };
