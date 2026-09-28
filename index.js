@@ -583,10 +583,23 @@ async function launchBot() {
     // ── Multi-session MongoDB (si MONGODB_URI configuré) ─────────────────
     const multiSessionActive = await initMultiSession().catch(() => false);
 
-    // ── Mono-session classique (toujours actif pour l'owner principal) ────
-    // Si multi-session actif, startBot() gère la session owner uniquement.
-    // Si mono-session → startBot() gère tout comme avant.
-    await startBot();
+    // ── Session principale ────────────────────────────────────────────────
+    // Si le compte principal a déjà été restauré par SessionManager, ne PAS
+    // ouvrir un second socket legacy avec les mêmes credentials/événements.
+    // Deux sockets pour le même compte = deux chemins handleMessage séparés
+    // et donc commandes exécutées plusieurs fois malgré les anti-doublons locaux.
+    const primaryPhone = String(process.env.PHONE_NUMBER || config.ownerNumber?.[0] || '').replace(/\D/g, '');
+    const primaryManagedBySessionManager = Boolean(
+      multiSessionActive &&
+      primaryPhone &&
+      _sessionManager?.getSession?.(primaryPhone)
+    );
+
+    if (primaryManagedBySessionManager) {
+      originalConsoleLog(`ℹ️  [Multi-Session] ${primaryPhone} déjà chargé par SessionManager — socket legacy principal ignoré (anti-doublon).`);
+    } else {
+      await startBot();
+    }
   } catch (err) {
     _botCrashCount++;
     const delay = Math.min(3000 * _botCrashCount, _MAX_CRASH_DELAY);
