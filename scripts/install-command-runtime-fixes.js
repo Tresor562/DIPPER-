@@ -165,9 +165,15 @@ if (!appendOwnGuard.test(finalIndex)) {
   throw new Error('[command-runtime] régression: index.js ne protège plus append non-fromMe');
 }
 
+const privateModeGatePresent =
+  finalHandler.includes("else if (config.selfMode)") ||
+  finalHandler.includes("else if (isPrivateMode)");
+if (!privateModeGatePresent) {
+  throw new Error('[command-runtime] garde-fou accès privé absent: config.selfMode/isPrivateMode');
+}
+
 for (const marker of [
   ACCESS_MARKER,
-  "else if (config.selfMode)",
   "const { checkAccess } = require('./utils/accessControl');",
   'if (!access.allowed)',
   'if (command.ownerOnly && !isMe)',
