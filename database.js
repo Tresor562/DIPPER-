@@ -44,7 +44,7 @@ const FILE_DEFAULTS = {
   users:    {},
   warnings: {},
   mods:     { moderators: [] },
-  botState: { supremeReactionCount: 0 },
+  botState: { supremeReactionCount: 0, accessMode: 'private' },
 };
 
 // ── Cache en mémoire, clé = chemin absolu résolu (donc déjà isolé par session) ──
@@ -261,6 +261,30 @@ const getUserSettings = (chatId) => {
   return users[chatId] || {};
 };
 
+// ── Mode d'accès du bot (privé/public) — isolé par session ───────────────
+// Source de vérité unique : database/sessions/<sessionId>/botState.json.
+// Toute session sans réglage explicite démarre en mode PRIVÉ.
+const getBotAccessMode = () => {
+  const state = readDB('botState');
+  const current = String(state.accessMode || '').toLowerCase();
+  if (current === 'private' || current === 'public') return current;
+
+  state.accessMode = 'private';
+  writeDB('botState', state);
+  return 'private';
+};
+
+const setBotAccessMode = (value) => {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized !== 'private' && normalized !== 'public') {
+    throw new Error('Mode invalide : private ou public attendu');
+  }
+  const state = readDB('botState');
+  state.accessMode = normalized;
+  writeDB('botState', state);
+  return normalized;
+};
+
 // ── Ghostg mode (NLP toggle) — PHASE 2 : isolé par session ────
 // Avant : global.ghostgMode / config.ghostgMode / fichier .env — un seul
 // interrupteur partagé par TOUTES les sessions (bug d'isolation prouvé,
@@ -285,6 +309,8 @@ module.exports = {
   getGroupSettings,
   updateGroupSettings,
   getNextSupremeReactionCount,
+  getBotAccessMode,
+  setBotAccessMode,
   getGhostgMode,
   setGhostgMode,
   getUser,
