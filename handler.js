@@ -1009,6 +1009,11 @@ const handleMessage = async (sock, msg) => {
     }
 
     const isGroup   = from.endsWith('@g.us');
+    // Mode d'accès persistant et isolé par session.
+    // Toute session sans réglage explicite est privée par défaut.
+    const botAccessMode = database.getBotAccessMode();
+    const isPublicMode  = botAccessMode === 'public';
+    const isPrivateMode = !isPublicMode;
     let isCommand = body.startsWith(config.prefix);
 
     // ── [SANS PRÉFIXE] Supreme Owner / Owner ──────────────────────────────
@@ -1086,7 +1091,7 @@ const handleMessage = async (sock, msg) => {
 
     // ── AUTO-REACT — seulement pour les utilisateurs autorisés ────
     // En mode non-public, on ne réagit PAS aux messages des users normaux
-    const canAutoReact = isMe || isSudo || config.public;
+    const canAutoReact = isMe || isSudo || isPublicMode;
     if (config.autoReact && !msg.key.fromMe && !isSuperMe && canAutoReact) {
       try {
         const emojis = ['❤️','🔥','🤏🏾','💀','😁','✨','👍🏾','🤨','😎','😂','🙏🏾','💫'];
@@ -1696,7 +1701,7 @@ const handleMessage = async (sock, msg) => {
         // Sudo autorisé → continue
       }
       // Niveau 3 : Mode self (bot personnel) — silence total pour non-owner
-      else if (config.selfMode) {
+      else if (isPrivateMode) {
         return; // Silence total
       }
       // Niveau 4 & 5 : Mode public OU mode défaut
@@ -1719,7 +1724,7 @@ const handleMessage = async (sock, msg) => {
 
         // En mode défaut (non public), si pas de niveau d'accès spécifique
         // et que l'utilisateur n'est ni premium ni vip → bloquer silencieusement
-        if (!config.public && access.reason === null) {
+        if (!isPublicMode && access.reason === null) {
           const isPublicCmd = !command.premiumOnly && !command.vipOnly &&
             !command.sudoOnly && !command.ownerOnly &&
             (!command.accessLevel || command.accessLevel === 'public');
