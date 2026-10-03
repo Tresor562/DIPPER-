@@ -16,6 +16,12 @@ process.env.PUPPETEER_SKIP_DOWNLOAD = 'true';
 process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'true';
 process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || '/tmp/puppeteer_cache_disabled';
 
+// VPS/NexControl convention: NEXUS_MONGODB_URI is the current shared Mongo URI.
+// Prefer it over a legacy MONGODB_URI when both are present, without logging the value.
+if (String(process.env.NEXUS_MONGODB_URI || '').trim()) {
+  process.env.MONGODB_URI = String(process.env.NEXUS_MONGODB_URI).trim();
+}
+
 const { initializeTempSystem } = require('./utils/tempManager');
 const { startCleanup } = require('./utils/cleanup');
 const { startMemoryGuard, stopMemoryGuard, setSock: setMemGuardSock } = require('./utils/memoryGuard');
