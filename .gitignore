@@ -1,0 +1,10 @@
+node_modules/
+*.log
+npm-debug.log*
+.env
+.env.*
+!.env.example
+auth_info_baileys/
+sessions/
+data/
+database/
